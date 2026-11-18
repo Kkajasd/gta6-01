@@ -165,7 +165,8 @@ export function createWorld(random, city) {
   function spawnPed(x, y) {
     const ped = {
       x, y, angle: random() * TWO_PI, speed: PEDS.speed + range(random, -PEDS.speedJitter, PEDS.speedJitter),
-      color: pick(random, ['#e8e0d0', '#7a9cc6', '#c67b7b', '#8fce9b', '#d9c27a']),
+      // Round 3: a wider wardrobe so pedestrians read as different people.
+      color: pick(random, ['#e8e0d0', '#7a9cc6', '#c67b7b', '#8fce9b', '#d9c27a', '#f2f4f6', '#ff8fa3', '#5d8a6a', '#b07cc6', '#e86a3c', '#3e6b8e', '#a8b8c8']),
       state: 'walk', timer: range(random, 2, 6), down: 0, flee: 0,
     };
     peds.push(ped);
@@ -327,10 +328,17 @@ export function createWorld(random, city) {
     state.camera.x = player.x;
     state.camera.y = player.y;
     // Parked cars the player can take, parked on roads (in a lane, facing along it).
+    // Round 3: more parked cars line the roads, so the streets read as lived-in.
     spawnParkedCar(city.places.home.x + 29, city.places.home.y + 150, -Math.PI / 2, '#e8452c', false);
     spawnParkedCar(city.places.cafe.x + 29, city.places.cafe.y + 150, -Math.PI / 2, '#7fb3d5', false);
     spawnParkedCar(city.places.market.x - 29, city.places.market.y - 150, Math.PI / 2, '#f0a35e', false);
     spawnParkedCar(city.places.beach.x + 29, ROAD_YS[5], 0, '#8bc34a', false);
+    spawnParkedCar(ROAD_XS[2] + 29, ROAD_YS[2] + 150, -Math.PI / 2, '#c27ba0', false);
+    spawnParkedCar(ROAD_XS[4] - 29, ROAD_YS[1] - 150, Math.PI / 2, '#9e9e9e', false);
+    spawnParkedCar(ROAD_XS[6] + 29, ROAD_YS[3] + 150, -Math.PI / 2, '#e8c547', false);
+    spawnParkedCar(ROAD_XS[1] - 29, ROAD_YS[4] - 150, Math.PI / 2, '#d8d8d8', false);
+    spawnParkedCar(ROAD_XS[5] + 29, ROAD_YS[4] + 150, -Math.PI / 2, '#7fb3d5', false);
+    spawnParkedCar(ROAD_XS[3] - 29, ROAD_YS[0] + 150, Math.PI / 2, '#f0a35e', false);
     for (let i = 0; i < TRAFFIC.count; i += 1) spawnTrafficCar();
     for (let i = 0; i < PEDS.count; i += 1) {
       const p = nearestRoadPoint(range(random, 300, WORLD.width - 300), range(random, 300, WORLD.height - 300));

@@ -86,10 +86,35 @@ export function createCity(random) {
   }
 
   function makeBuilding(rnd, x, y, w, h) {
+    // Round 3: seeded roof detail — AC units, vents, a skylight, and on some
+    // roofs a garden, a pool, or (on the biggest blocks) a helipad. All of it
+    // is fixed at generation time, so the same seed draws the same roofs.
+    const roof = [];
+    const big = w > 200 && h > 200;
+    const nAc = Math.floor(rnd() * 3);
+    for (let i = 0; i < nAc; i += 1) {
+      roof.push({ kind: 'ac', x: x + 16 + rnd() * Math.max(10, w - 44), y: y + 16 + rnd() * Math.max(10, h - 44), s: 12 + rnd() * 6 });
+    }
+    const nVent = Math.floor(rnd() * 3);
+    for (let i = 0; i < nVent; i += 1) {
+      roof.push({ kind: 'vent', x: x + 16 + rnd() * Math.max(10, w - 44), y: y + 16 + rnd() * Math.max(10, h - 44), s: 6 + rnd() * 4 });
+    }
+    if (rnd() < 0.6) {
+      roof.push({ kind: 'sky', x: x + w * 0.3, y: y + h * 0.3, w: w * 0.4, h: h * 0.3 });
+    }
+    const roll = rnd();
+    if (big && roll < 0.14) {
+      roof.push({ kind: 'heli', x: x + w / 2, y: y + h / 2, r: Math.min(w, h) * 0.28 });
+    } else if (roll < 0.3) {
+      roof.push({ kind: 'garden', x: x + w * 0.18, y: y + h * 0.18, w: w * 0.64, h: h * 0.64 });
+    } else if (roll < 0.42) {
+      roof.push({ kind: 'pool', x: x + w * 0.25, y: y + h * 0.28, w: w * 0.5, h: h * 0.36 });
+    }
     return {
       x, y, width: w, height: h,
       color: pick(rnd, PALETTE.buildingRoof),
       shade: 0.55 + rnd() * 0.3,
+      roof,
     };
   }
 
@@ -105,7 +130,124 @@ export function createCity(random) {
     beach: { x: ROAD_XS[2], y: beach.y + 55, label: 'South Beach' },
   };
 
-  return { buildings, parks, plazas, beach, water, docks, places };
+  // Round 3: street furniture and shore props, all precomputed here from the
+  // seeded RNG so the renderer only draws them. Trees sit on sidewalks (never
+  // on a road, inside a building, or blocking an intersection); lamps stand at
+  // intersection corners; the beach gets umbrellas, towels, palms and sand
+  // speckle; the docks get stacked containers and boats in the south water.
+  const trees = [];
+  const lamps = [];
+  const inRect = (x, y, r, m) => x > r.x - m && x < r.x + r.width + m && y > r.y - m && y < r.y + r.height + m;
+  const clearOfBuildings = (x, y, m) => {
+    for (const b of buildings) if (inRect(x, y, b, m)) return false;
+    return true;
+  };
+  const nearCrossing = (x, y, d) => {
+    for (const rx of ROAD_XS) for (const ry of ROAD_YS) {
+      if (Math.abs(x - rx) < d && Math.abs(y - ry) < d) return true;
+    }
+    return false;
+  };
+  for (const rx of ROAD_XS) {
+    for (let y = 140; y < WORLD.height - 140; y += 170) {
+      for (const side of [-1, 1]) {
+        const tx = rx + side * (HALF + 11);
+        const ty = y + range(random, -40, 40);
+        if (ty > beach.y - 30) continue;
+        if (nearCrossing(tx, ty, 110)) continue;
+        if (!clearOfBuildings(tx, ty, 16)) continue;
+        if (random() < 0.45) continue;
+        trees.push({ x: tx, y: ty, r: 13 + random() * 8, palm: false });
+      }
+    }
+  }
+  for (const ry of ROAD_YS) {
+    for (let x = 140; x < WORLD.width - 140; x += 170) {
+      for (const side of [-1, 1]) {
+        const tx = x + range(random, -40, 40);
+        const ty = ry + side * (HALF + 11);
+        if (ty > beach.y - 30) continue;
+        if (nearCrossing(tx, ty, 110)) continue;
+        if (!clearOfBuildings(tx, ty, 16)) continue;
+        if (random() < 0.45) continue;
+        trees.push({ x: tx, y: ty, r: 13 + random() * 8, palm: false });
+      }
+    }
+  }
+  for (const rx of ROAD_XS) {
+    for (const ry of ROAD_YS) {
+      if (ry > beach.y - 40) continue;
+      lamps.push({ x: rx + HALF + 8, y: ry - HALF - 8 });
+      lamps.push({ x: rx - HALF - 8, y: ry + HALF + 8 });
+    }
+  }
+  const beachProps = { umbrellas: [], towels: [], palms: [], sand: [] };
+  for (let i = 0; i < 16; i += 1) {
+    beachProps.umbrellas.push({
+      x: 80 + random() * (WORLD.width - 160),
+      y: beach.y + 14 + random() * 46,
+      color: pick(random, ['#e8452c', '#2f7fb8', '#ffd23e', '#c27ba0', '#39d353']),
+    });
+  }
+  for (let i = 0; i < 12; i += 1) {
+    beachProps.towels.push({
+      x: 80 + random() * (WORLD.width - 160),
+      y: beach.y + 12 + random() * 56,
+      color: pick(random, ['#ff8fa3', '#7fb3d5', '#ffd23e', '#8bc34a']),
+      angle: (random() - 0.5) * 0.6,
+    });
+  }
+  for (let i = 0; i < 9; i += 1) {
+    beachProps.palms.push({ x: 120 + random() * (WORLD.width - 240), y: beach.y + 16 + random() * 30 });
+  }
+  for (let i = 0; i < 140; i += 1) {
+    beachProps.sand.push({ x: random() * WORLD.width, y: beach.y + random() * beach.height, r: 1 + random() * 2 });
+  }
+  const containers = [];
+  const containerColors = ['#e8452c', '#2f7fb8', '#f0a35e', '#39d353', '#c27ba0', '#ffd23e'];
+  for (let row = 0; row < 4; row += 1) {
+    const cy = docks.y + 30 + row * 96;
+    const stack = 1 + Math.floor(random() * 2);
+    for (let s = 0; s < stack; s += 1) {
+      containers.push({
+        x: docks.x + 22 + random() * 30, y: cy - s * 30, w: 96 + random() * 40, h: 26,
+        color: pick(random, containerColors),
+      });
+    }
+  }
+  const boats = [];
+  for (let i = 0; i < 5; i += 1) {
+    boats.push({
+      x: 260 + i * 620 + random() * 120, y: water.y + 34 + random() * 36,
+      angle: (random() - 0.5) * 0.5, color: pick(random, ['#f2f4f6', '#ffd23e', '#e8452c']),
+    });
+  }
+  // Parks: a pond and a footpath in most, plus trees at seeded spots with
+  // varied sizes instead of a fixed grid.
+  const parkDetails = parks.map((park) => {
+    const parkTrees = [];
+    const n = Math.max(3, Math.floor((park.width * park.height) / 26000));
+    for (let i = 0; i < n; i += 1) {
+      parkTrees.push({
+        x: park.x + 30 + random() * Math.max(10, park.width - 60),
+        y: park.y + 30 + random() * Math.max(10, park.height - 60),
+        r: 14 + random() * 12,
+      });
+    }
+    return {
+      pond: random() < 0.6
+        ? { x: park.x + park.width * (0.3 + random() * 0.3), y: park.y + park.height * (0.3 + random() * 0.3), rx: 34 + random() * 22, ry: 24 + random() * 16 }
+        : null,
+      path: random() < 0.5,
+      trees: parkTrees,
+    };
+  });
+  const fountains = plazas.map((plaza) => ({
+    x: plaza.x + plaza.width / 2, y: plaza.y + plaza.height / 2,
+    r: Math.min(plaza.width, plaza.height) * 0.2,
+  }));
+
+  return { buildings, parks, plazas, beach, water, docks, places, trees, lamps, beachProps, containers, boats, parkDetails, fountains };
 }
 
 /** True when the circle at (x, y) with radius r overlaps any solid building. */

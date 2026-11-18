@@ -1,5 +1,6 @@
 // A small seeded random number generator (mulberry32): the same seed gives the same
 // city, traffic and missions, which is what makes the screenshot scenes repeatable.
+// Round 3: no RNG change — the new roof and street detail draws from this same stream.
 
 export function createRandom(seed) {
   let a = seed | 0;

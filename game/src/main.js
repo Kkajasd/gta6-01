@@ -1,6 +1,7 @@
 // Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s
 // steps (several in a slow frame, none in a fast one), and the renderer paints what is
 // there. The game moves between four screens: title, play, paused and game over.
+// Round 3: no boot change — the polish is visual only.
 //
 // ?seed=N fixes the city and traffic. ?shot=chase|street|mission|start (with &seed=N)
 // stages that scene instead of running the loop, paints it twice and sets

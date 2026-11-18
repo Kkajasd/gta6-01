@@ -70,6 +70,9 @@ export function stageShot(name, world, city) {
     world.reset();
     // Job 3: the getaway — wanted, two patrol cars, and the Hideout as the goal.
     world.jumpToMission(2);
+    // Round 3: a third patrol car joins the chase, so the cover frame shows
+    // the player boxed in by police instead of a single car behind.
+    world.addWanted(1, 0);
     // Put Dana in the car by the garage and floor it toward the Hideout.
     const car = state.cars.find((c) => c.kind === 'parked');
     if (car) {
@@ -109,9 +112,11 @@ export function stageShot(name, world, city) {
     world.reset();
     // Job 4: the docks shootout — three rivals, Dana armed, crate job on the HUD.
     // Dana starts close in and fires in bursts, so the frame still shows rivals standing.
+    // Round 3: Dana stands on the pier itself, so the stacked containers and the
+    // wooden docks fill the left of the frame instead of sitting at its edge.
     world.jumpToMission(3);
-    state.player.x = city.places.docks.x + 180;
-    state.player.y = city.places.docks.y + 120;
+    state.player.x = city.places.docks.x + 140;
+    state.player.y = city.places.docks.y + 230;
     state.player.angle = Math.PI;
     state.ammo = 48;
     for (let i = 0; i < MISSION_SECONDS / STEP; i += 1) {

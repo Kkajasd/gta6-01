@@ -6,6 +6,8 @@
 
 Vireo Bay: an open-world crime game in the spirit of GTA 6 — drive around a sun-soaked city, steal cars, lose the police, run four story missions and pay off a $5,000 debt. Traffic, pedestrians, combat, a HUD with a minimap, a start screen and a save, all offline in a desktop browser.
 
+Round 3 polish: golden-hour lighting, rooftop detail (AC units, skylights, gardens, helipads), street trees and lamps, crosswalks, a richer beach and docks, and denser traffic.
+
 ## Run it
 
 ```sh

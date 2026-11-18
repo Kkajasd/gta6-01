@@ -2,6 +2,7 @@
 // punch, pause, confirm) are queued as bit flags and taken once by the loop, so a press
 // between two frames is never lost and never counted twice. The mouse position is kept
 // in screen pixels; the caller converts it to world coordinates for aiming.
+// Round 3: no input change — the polish is visual only.
 
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;

@@ -2,6 +2,7 @@
 // hum follows the car's speed, a two-tone siren wails while the police chase, and
 // short blips mark pickups, shots and mission bells. Everything is created lazily on
 // the first user gesture, so a screenshot run never needs audio at all.
+// Round 3: no audio change — the polish is visual only.
 
 export function createAudio() {
   let ctx = null;

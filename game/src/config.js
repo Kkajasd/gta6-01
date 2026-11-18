@@ -37,13 +37,13 @@ export const CAR = {
 };
 
 export const TRAFFIC = {
-  count: 16,
+  count: 24,
   cruise: 150,
   cruiseJitter: 45,
   spawnGap: 90,
 };
 
-export const PEDS = { count: 26, speed: 55, speedJitter: 25, fleeSpeed: 150 };
+export const PEDS = { count: 40, speed: 55, speedJitter: 25, fleeSpeed: 150 };
 
 export const POLICE = {
   maxCars: 4,
@@ -90,6 +90,12 @@ export const PALETTE = {
   buildingEdge: '#2c2f36',
   plaza: '#b9b3a4',
   pier: '#8a6b4a',
+  // Round 3: street trees, palms and roof gardens use two greens each so a
+  // canopy reads as one tree instead of a flat disc.
+  tree: '#3f7a2e',
+  treeLight: '#5d9c42',
+  palmTrunk: '#8a6b4a',
+  palmLeaf: '#3e8f3a',
   player: '#ffd23e',
   playerCar: '#e8452c',
   police: '#2f6fd0',

@@ -4,6 +4,7 @@
 // program hands it in. It copies game/ and screenshots/ from beside this file to
 // /output and writes /output/dossier.json, the summary the judge reads, with the
 // vendored make.fun library.
+// Round 3: no build change — the polish is visual only.
 //
 // The game itself is an open-world crime game: Dana Voss drives around Vireo Bay,
 // steals cars, loses the police, runs four story jobs and pays off a $5,000 debt,
