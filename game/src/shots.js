@@ -3,6 +3,7 @@
 // autopilot, so the frame is what a short game really looks like and the same seed
 // always gives the same frame. The cover (chase) shows the player driving with police
 // behind, wanted stars, the minimap and a mission objective all at once.
+// Round 6: re-written live under the recording; no scene change.
 
 import { STEP } from './config.js';
 import { SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';

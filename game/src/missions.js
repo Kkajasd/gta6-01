@@ -4,6 +4,7 @@
 // reads the stages, never the story text, so a stage can be re-staged for a screenshot
 // without changing the rules.
 // Round 3: no mission change — the polish is visual only.
+// Round 6: re-written live under the recording; no mission change.
 
 import { MISSIONS } from './config.js';
 

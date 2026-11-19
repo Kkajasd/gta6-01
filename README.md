@@ -8,6 +8,8 @@ Vireo Bay: an open-world crime game in the spirit of GTA 6 — drive around a su
 
 Round 3 polish: golden-hour lighting, rooftop detail (AC units, skylights, gardens, helipads), street trees and lamps, crosswalks, a richer beach and docks, and denser traffic.
 
+Round 6 polish: paneled roofs with parapet rims, a brighter title screen, larger outlined pedestrians, a screen-space place label, and more life on the ground — flowers, benches, bollards, foam and sun glints, white road edges and manhole covers.
+
 ## Run it
 
 ```sh

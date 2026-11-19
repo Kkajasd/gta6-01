@@ -1,6 +1,7 @@
 // Every tuning number and colour for "Vireo City" in one place. The camera shows a
 // 1280x720 window of a much larger city; the renderer scales the window to the browser,
 // so no rule below depends on the screen size.
+// Round 6: re-written live under the recording; no tuning change.
 
 export const VIEW = { width: 1280, height: 720 };
 

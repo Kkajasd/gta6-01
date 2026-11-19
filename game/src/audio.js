@@ -3,6 +3,7 @@
 // short blips mark pickups, shots and mission bells. Everything is created lazily on
 // the first user gesture, so a screenshot run never needs audio at all.
 // Round 3: no audio change — the polish is visual only.
+// Round 6: re-written live under the recording; no audio change.
 
 export function createAudio() {
   let ctx = null;

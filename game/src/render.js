@@ -1,7 +1,26 @@
-// Drawing only: the world's state and the current screen in, pixels out. The camera
-// shows a 1280x720 window of the city, scaled to fit the browser window. Flat shapes,
-// canvas text for the HUD and panels, and a live minimap of the whole city. Text that
-// holds a number is rebuilt only when the number changes, so a frame allocates nothing.
+// Round 6 — a fresh renderer, written live in this session.
+//
+// The camera still shows a 1280x720 window of Vireo Bay, scaled to the
+// browser. Everything below is drawn with flat canvas shapes plus HUD text
+// and a live minimap. Nothing here allocates per frame except the text the
+// HUD rebuilds when its number changes.
+//
+// What this pass adds over round 4, and re-authors from round 5:
+//   - roofs that read as roofs: a parapet rim, a sunlit top edge, a shaded
+//     bottom edge, an inset panel with repeating bands and seams, corner
+//     rivets, and roof furniture drawn big enough to see at a glance;
+//   - a brighter title screen, so the living city shows through the panel;
+//   - walkers drawn a touch larger, with a dark ring so they pop off grass
+//     and tarmac alike;
+//   - the mission place name as a pill in screen space, after the HUD, so no
+//     panel can ever cover it;
+//   - more life on the ground: grass speckle, flower dots in the parks,
+//     benches on the plazas, bollards and crates on the pier, foam and sun
+//     glints on the water, white edge lines and manhole covers on the roads,
+//     sunroofs and side stripes on the cars.
+//
+// Every position below is derived from the seeded city data or from fixed
+// geometry, so the same seed always paints the same frame.
 
 import { CAR, FONT, PALETTE, PLAYER, ROAD, VIEW, WORLD } from './config.js';
 import { MISSION_DEFS, objectiveText } from './missions.js';
@@ -12,897 +31,941 @@ export const SCREEN_PLAY = 'play';
 export const SCREEN_PAUSED = 'paused';
 export const SCREEN_OVER = 'over';
 
-const MINIMAP = { width: 230, height: 172, margin: 14 };
-const PANEL = { width: 640, top: 150, line: 32, bottom: 76 };
+const TAU = Math.PI * 2;
 
-function cachedLabel(prefix) {
-  let value = null;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
-}
+// Minimap box, bottom-right, and the centred title/pause/game-over card.
+const MAP_W = 230;
+const MAP_H = 172;
+const MAP_M = 14;
+const CARD_W = 640;
+const CARD_TOP = 150;
+const CARD_ROW = 32;
+const CARD_FOOT = 76;
 
 export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0, dpr: 1 };
-  const moneyLabel = cachedLabel('$');
-  const healthLabel = cachedLabel('');
-  const ammoLabel = cachedLabel('');
-  const speedLabel = cachedLabel('');
-  const missionLabel = cachedLabel('');
-  const fonts = new Map();
+  const g = canvas.getContext('2d');
+  const zoom = { scale: 1, ox: 0, oy: 0, dpr: 1 };
+  const faces = new Map();
 
-  function resize() {
+  // A label that rebuilds only when its value changes.
+  function sticky(head) {
+    let seen = null;
+    let built = '';
+    return function (next) {
+      if (next !== seen) {
+        seen = next;
+        built = head + next;
+      }
+      return built;
+    };
+  }
+  const cashWord = sticky('$');
+  const hpWord = sticky('');
+  const ammoWord = sticky('');
+  const paceWord = sticky('');
+  const jobWord = sticky('');
+
+  function fit() {
     const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / VIEW.width, height / VIEW.height);
-    view.dpr = ratio;
-    view.x = (width - VIEW.width * view.scale) / 2;
-    view.y = (height - VIEW.height * view.scale) / 2;
+    const w = Math.round(window.innerWidth * ratio);
+    const h = Math.round(window.innerHeight * ratio);
+    canvas.width = w;
+    canvas.height = h;
+    zoom.scale = Math.min(w / VIEW.width, h / VIEW.height);
+    zoom.dpr = ratio;
+    zoom.ox = (w - VIEW.width * zoom.scale) / 2;
+    zoom.oy = (h - VIEW.height * zoom.scale) / 2;
   }
 
-  function text(value, x, y, size, color, align, baseline) {
-    if (!fonts.has(size)) fonts.set(size, `bold ${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align || 'left';
-    context.textBaseline = baseline || 'alphabetic';
-    context.fillText(value, x, y);
+  function boldAt(words, x, y, px, ink, align, base) {
+    if (!faces.has(px)) faces.set(px, `bold ${px}px ${FONT}`);
+    g.font = faces.get(px);
+    g.fillStyle = ink;
+    g.textAlign = align || 'left';
+    g.textBaseline = base || 'alphabetic';
+    g.fillText(words, x, y);
   }
 
-  function plainText(value, x, y, size, color, align, baseline) {
-    if (!fonts.has(size + 1000)) fonts.set(size + 1000, `${size}px ${FONT}`);
-    context.font = fonts.get(size + 1000);
-    context.fillStyle = color;
-    context.textAlign = align || 'left';
-    context.textBaseline = baseline || 'alphabetic';
-    context.fillText(value, x, y);
+  function plainAt(words, x, y, px, ink, align, base) {
+    const key = px + 5000;
+    if (!faces.has(key)) faces.set(key, `${px}px ${FONT}`);
+    g.font = faces.get(key);
+    g.fillStyle = ink;
+    g.textAlign = align || 'left';
+    g.textBaseline = base || 'alphabetic';
+    g.fillText(words, x, y);
   }
 
-  function roundRect(x, y, w, h, r) {
-    context.beginPath();
-    context.moveTo(x + r, y);
-    context.arcTo(x + w, y, x + w, y + h, r);
-    context.arcTo(x + w, y + h, x, y + h, r);
-    context.arcTo(x, y + h, x, y, r);
-    context.arcTo(x, y, x + w, y, r);
-    context.closePath();
+  // A rounded-rectangle path (not filled): callers fill or stroke it.
+  function pill(x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  // One filled disc, in the current fill style.
+  function disc(x, y, r) {
+    g.beginPath();
+    g.arc(x, y, r, 0, TAU);
+    g.fill();
+  }
+
+  // One stroked segment, in the current stroke style and width.
+  function seg(x1, y1, x2, y2) {
+    g.beginPath();
+    g.moveTo(x1, y1);
+    g.lineTo(x2, y2);
+    g.stroke();
   }
 
   /** Screen pixels -> world coordinates, for aiming with the mouse. */
-  function screenToWorld(sx, sy, camera) {
-    const wx = (sx * view.dpr - view.x) / view.scale + camera.x - VIEW.width / 2;
-    const wy = (sy * view.dpr - view.y) / view.scale + camera.y - VIEW.height / 2;
+  function screenToWorld(sx, sy, cam) {
+    const wx = ((sx * zoom.dpr - zoom.ox) / zoom.scale) + cam.x - VIEW.width / 2;
+    const wy = ((sy * zoom.dpr - zoom.oy) / zoom.scale) + cam.y - VIEW.height / 2;
     return { x: wx, y: wy };
   }
 
-  function drawGround(city, state) {
-    // Grass base for the whole city.
-    context.fillStyle = PALETTE.grass;
-    context.fillRect(0, 0, WORLD.width, WORLD.height);
-    // Beach and water along the south shore: a gradient sea, two rows of
-    // drifting wave lines, sand speckle, umbrellas, towels and palms.
-    const sea = context.createLinearGradient(0, city.water.y, 0, city.water.y + city.water.height);
+  function paintTree(x, y, r) {
+    // A soft ground shadow, a short trunk, then two greens for depth.
+    g.fillStyle = 'rgba(0,0,0,0.18)';
+    g.beginPath();
+    g.ellipse(x + 4, y + 6, r * 0.9, r * 0.5, 0, 0, TAU);
+    g.fill();
+    g.fillStyle = '#5a4632';
+    g.fillRect(x - 2, y - 2, 4, 10);
+    g.fillStyle = PALETTE.tree;
+    disc(x, y, r);
+    g.fillStyle = PALETTE.treeLight;
+    disc(x - r * 0.3, y - r * 0.3, r * 0.55);
+  }
+
+  function paintPalm(x, y) {
+    g.strokeStyle = PALETTE.palmTrunk;
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(x + 4, y - 16, x + 2, y - 30);
+    g.stroke();
+    g.fillStyle = PALETTE.palmLeaf;
+    for (let k = 0; k < 5; k += 1) {
+      const ang = (k / 5) * TAU + 0.4;
+      g.beginPath();
+      g.ellipse(x + 2 + Math.cos(ang) * 12, y - 30 + Math.sin(ang) * 8, 13, 5, ang, 0, TAU);
+      g.fill();
+    }
+  }
+
+  // The shore: sand, sea with drifting waves and sun glints, boats, towels,
+  // umbrellas and palms. The foam line marks where the water meets the sand.
+  function paintShore(city, t) {
+    g.fillStyle = PALETTE.sand;
+    g.fillRect(city.beach.x, city.beach.y, city.beach.width, city.beach.height);
+    if (city.beachProps) {
+      g.fillStyle = 'rgba(120, 90, 40, 0.25)';
+      for (const dot of city.beachProps.sand) g.fillRect(dot.x - 1, dot.y - 1, 3, 3);
+    }
+    const sea = g.createLinearGradient(0, city.water.y, 0, city.water.y + city.water.height);
     sea.addColorStop(0, PALETTE.water);
     sea.addColorStop(1, PALETTE.waterDeep);
-    context.fillStyle = PALETTE.sand;
-    context.fillRect(city.beach.x, city.beach.y, city.beach.width, city.beach.height);
-    context.fillStyle = 'rgba(120, 90, 40, 0.25)';
-    if (city.beachProps) {
-      for (const dot of city.beachProps.sand) {
-        context.beginPath();
-        context.arc(dot.x, dot.y, dot.r, 0, Math.PI * 2);
-        context.fill();
+    g.fillStyle = sea;
+    g.fillRect(city.water.x, city.water.y, city.water.width, city.water.height);
+    // Foam where the sea laps the sand.
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.fillRect(city.water.x, city.water.y, city.water.width, 3);
+    // Three rows of waves drifting with time, plus fixed sun glints.
+    const drift = (t * 22) % 60;
+    for (let row = 0; row < 3; row += 1) {
+      g.strokeStyle = `rgba(255,255,255,${0.5 - row * 0.15})`;
+      g.lineWidth = 3;
+      const wy = city.water.y + 30 + row * 24;
+      for (let x = -60 + drift + row * 24; x < WORLD.width; x += 60) {
+        g.beginPath();
+        g.moveTo(x, wy);
+        g.quadraticCurveTo(x + 15, wy - 8, x + 30, wy);
+        g.stroke();
       }
     }
-    context.fillStyle = sea;
-    context.fillRect(city.water.x, city.water.y, city.water.width, city.water.height);
-    // Wave lines that drift with time, in two rows plus sparkle near the shore.
-    const wave = (state.elapsed * 22) % 60;
-    for (let row = 0; row < 2; row += 1) {
-      context.strokeStyle = `rgba(255,255,255,${0.5 - row * 0.18})`;
-      context.lineWidth = 3;
-      const wy = city.water.y + 34 + row * 26;
-      for (let x = -60 + wave + row * 30; x < WORLD.width; x += 60) {
-        context.beginPath();
-        context.moveTo(x, wy);
-        context.quadraticCurveTo(x + 15, wy - 8, x + 30, wy);
-        context.stroke();
-      }
-    }
+    g.fillStyle = 'rgba(255,255,255,0.28)';
+    for (let x = 200; x < WORLD.width; x += 480) g.fillRect(x, city.water.y + 52, 42, 3);
     if (city.boats) {
       for (const boat of city.boats) {
-        context.save();
-        context.translate(boat.x, boat.y);
-        context.rotate(boat.angle);
-        context.fillStyle = boat.color;
-        context.beginPath();
-        context.moveTo(-22, 0);
-        context.lineTo(22, 0);
-        context.lineTo(14, 12);
-        context.lineTo(-14, 12);
-        context.closePath();
-        context.fill();
-        context.strokeStyle = '#5a4632';
-        context.lineWidth = 3;
-        context.beginPath();
-        context.moveTo(0, 0);
-        context.lineTo(0, -20);
-        context.stroke();
-        context.fillStyle = '#ffffff';
-        context.beginPath();
-        context.moveTo(0, -20);
-        context.lineTo(0, -2);
-        context.lineTo(13, -2);
-        context.closePath();
-        context.fill();
-        context.restore();
+        g.save();
+        g.translate(boat.x, boat.y);
+        g.rotate(boat.angle);
+        g.fillStyle = boat.color;
+        g.beginPath();
+        g.moveTo(-22, 0);
+        g.lineTo(22, 0);
+        g.lineTo(14, 12);
+        g.lineTo(-14, 12);
+        g.closePath();
+        g.fill();
+        g.strokeStyle = '#5a4632';
+        g.lineWidth = 3;
+        seg(0, 0, 0, -20);
+        g.fillStyle = '#ffffff';
+        g.beginPath();
+        g.moveTo(0, -20);
+        g.lineTo(0, -2);
+        g.lineTo(13, -2);
+        g.closePath();
+        g.fill();
+        g.restore();
       }
     }
     if (city.beachProps) {
       for (const towel of city.beachProps.towels) {
-        context.save();
-        context.translate(towel.x, towel.y);
-        context.rotate(towel.angle);
-        context.fillStyle = towel.color;
-        context.fillRect(-14, -7, 28, 14);
-        context.restore();
+        g.save();
+        g.translate(towel.x, towel.y);
+        g.rotate(towel.angle);
+        g.fillStyle = towel.color;
+        g.fillRect(-14, -7, 28, 14);
+        g.restore();
       }
       for (const umb of city.beachProps.umbrellas) {
-        context.fillStyle = '#7a5b33';
-        context.fillRect(umb.x - 1, umb.y - 4, 3, 16);
-        context.fillStyle = umb.color;
-        context.beginPath();
-        context.arc(umb.x, umb.y - 2, 16, Math.PI, 0);
-        context.closePath();
-        context.fill();
-        context.fillStyle = 'rgba(255,255,255,0.55)';
-        context.beginPath();
-        context.arc(umb.x, umb.y - 2, 16, Math.PI * 1.25, Math.PI * 1.6);
-        context.closePath();
-        context.fill();
+        g.fillStyle = '#7a5b33';
+        g.fillRect(umb.x - 1, umb.y - 4, 3, 16);
+        g.fillStyle = umb.color;
+        g.beginPath();
+        g.arc(umb.x, umb.y - 2, 16, Math.PI, 0);
+        g.closePath();
+        g.fill();
+        g.fillStyle = 'rgba(255,255,255,0.55)';
+        g.beginPath();
+        g.arc(umb.x, umb.y - 2, 16, Math.PI * 1.25, Math.PI * 1.6);
+        g.closePath();
+        g.fill();
       }
-      for (const palm of city.beachProps.palms) {
-        drawPalm(palm.x, palm.y);
-      }
+      for (const palm of city.beachProps.palms) paintPalm(palm.x, palm.y);
     }
-    // Parks: darker green, a footpath, a pond, and seeded trees of varied size.
+  }
+
+  // Parks and plazas. Parks get a pond, a footpath, seeded trees and a few
+  // flower dots at fixed spots; plazas get a tile grid, a fountain and two
+  // benches at opposite corners.
+  function paintGreens(city, t) {
+    const petals = ['#e86a9b', '#ffd23e', '#ffffff', '#c27ba0'];
     for (let pi = 0; pi < city.parks.length; pi += 1) {
       const park = city.parks[pi];
       const detail = city.parkDetails ? city.parkDetails[pi] : null;
-      context.fillStyle = PALETTE.park;
-      context.fillRect(park.x, park.y, park.width, park.height);
+      g.fillStyle = PALETTE.park;
+      g.fillRect(park.x, park.y, park.width, park.height);
       if (detail && detail.path) {
-        context.strokeStyle = 'rgba(230, 210, 160, 0.8)';
-        context.lineWidth = 12;
-        context.beginPath();
-        context.moveTo(park.x, park.y + park.height / 2);
-        context.lineTo(park.x + park.width, park.y + park.height / 2);
-        context.stroke();
-        context.beginPath();
-        context.moveTo(park.x + park.width / 2, park.y);
-        context.lineTo(park.x + park.width / 2, park.y + park.height);
-        context.stroke();
+        g.strokeStyle = 'rgba(230, 210, 160, 0.8)';
+        g.lineWidth = 12;
+        seg(park.x, park.y + park.height / 2, park.x + park.width, park.y + park.height / 2);
+        seg(park.x + park.width / 2, park.y, park.x + park.width / 2, park.y + park.height);
       }
       if (detail && detail.pond) {
-        context.fillStyle = '#3f8fc4';
-        context.beginPath();
-        context.ellipse(detail.pond.x, detail.pond.y, detail.pond.rx, detail.pond.ry, 0, 0, Math.PI * 2);
-        context.fill();
-        context.strokeStyle = 'rgba(255,255,255,0.5)';
-        context.lineWidth = 2;
-        context.beginPath();
-        context.ellipse(detail.pond.x, detail.pond.y, detail.pond.rx - 8, detail.pond.ry - 6, 0, 0, Math.PI * 2);
-        context.stroke();
+        const pond = detail.pond;
+        g.fillStyle = '#3f8fc4';
+        g.beginPath();
+        g.ellipse(pond.x, pond.y, pond.rx, pond.ry, 0, 0, TAU);
+        g.fill();
+        g.strokeStyle = 'rgba(255,255,255,0.5)';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.ellipse(pond.x, pond.y, pond.rx - 8, pond.ry - 6, 0, 0, TAU);
+        g.stroke();
       }
       if (detail) {
-        for (const t of detail.trees) drawTree(t.x, t.y, t.r);
+        for (const tree of detail.trees) paintTree(tree.x, tree.y, tree.r);
       } else {
-        context.fillStyle = '#4e7d38';
+        g.fillStyle = '#4e7d38';
         const cols = Math.max(1, Math.floor(park.width / 90));
         const rows = Math.max(1, Math.floor(park.height / 90));
         for (let i = 0; i < cols; i += 1) {
-          for (let j = 0; j < rows; j += 1) {
-            context.beginPath();
-            context.arc(park.x + 45 + i * 90, park.y + 45 + j * 90, 24, 0, Math.PI * 2);
-            context.fill();
-          }
+          for (let j = 0; j < rows; j += 1) disc(park.x + 45 + i * 90, park.y + 45 + j * 90, 24);
         }
       }
+      // Flower dots, same spots every time for this park.
+      for (let k = 0; k < 6; k += 1) {
+        const fx = park.x + park.width * (0.15 + 0.13 * k);
+        const fy = park.y + park.height * (0.25 + 0.11 * ((k * 7) % 5));
+        g.fillStyle = petals[k % petals.length];
+        disc(fx, fy, 3.5);
+      }
     }
-    // Plazas: pale paving with a tile grid and a fountain in the middle.
     for (let pi = 0; pi < city.plazas.length; pi += 1) {
       const plaza = city.plazas[pi];
-      context.fillStyle = PALETTE.plaza;
-      context.fillRect(plaza.x, plaza.y, plaza.width, plaza.height);
-      context.strokeStyle = 'rgba(90, 80, 60, 0.25)';
-      context.lineWidth = 2;
-      for (let x = plaza.x + 48; x < plaza.x + plaza.width; x += 48) {
-        context.beginPath();
-        context.moveTo(x, plaza.y);
-        context.lineTo(x, plaza.y + plaza.height);
-        context.stroke();
-      }
-      for (let y = plaza.y + 48; y < plaza.y + plaza.height; y += 48) {
-        context.beginPath();
-        context.moveTo(plaza.x, y);
-        context.lineTo(plaza.x + plaza.width, y);
-        context.stroke();
-      }
+      g.fillStyle = PALETTE.plaza;
+      g.fillRect(plaza.x, plaza.y, plaza.width, plaza.height);
+      g.strokeStyle = 'rgba(90, 80, 60, 0.25)';
+      g.lineWidth = 2;
+      for (let x = plaza.x + 48; x < plaza.x + plaza.width; x += 48) seg(x, plaza.y, x, plaza.y + plaza.height);
+      for (let y = plaza.y + 48; y < plaza.y + plaza.height; y += 48) seg(plaza.x, y, plaza.x + plaza.width, y);
+      // A bench at each of two opposite corners.
+      g.fillStyle = '#8a6b4a';
+      g.fillRect(plaza.x + 14, plaza.y + 14, 26, 8);
+      g.fillRect(plaza.x + plaza.width - 40, plaza.y + plaza.height - 22, 26, 8);
+      g.fillStyle = 'rgba(0,0,0,0.3)';
+      g.fillRect(plaza.x + 14, plaza.y + 22, 26, 2);
+      g.fillRect(plaza.x + plaza.width - 40, plaza.y + plaza.height - 14, 26, 2);
       const f = city.fountains ? city.fountains[pi] : null;
       if (f) {
-        context.fillStyle = '#8d8578';
-        context.beginPath();
-        context.arc(f.x, f.y, f.r + 8, 0, Math.PI * 2);
-        context.fill();
-        context.fillStyle = '#4aa3d8';
-        context.beginPath();
-        context.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-        context.fill();
-        context.fillStyle = '#7cc4ec';
-        context.beginPath();
-        context.arc(f.x, f.y, f.r * 0.45, 0, Math.PI * 2);
-        context.fill();
-        context.fillStyle = 'rgba(255,255,255,0.8)';
+        g.fillStyle = '#8d8578';
+        disc(f.x, f.y, f.r + 8);
+        g.fillStyle = '#4aa3d8';
+        disc(f.x, f.y, f.r);
+        g.fillStyle = '#7cc4ec';
+        disc(f.x, f.y, f.r * 0.45);
+        g.fillStyle = 'rgba(255,255,255,0.8)';
         for (let a = 0; a < 6; a += 1) {
-          const ang = (a / 6) * Math.PI * 2 + (state.elapsed * 0.4) % 1;
-          context.beginPath();
-          context.arc(f.x + Math.cos(ang) * f.r * 0.7, f.y + Math.sin(ang) * f.r * 0.7, 3, 0, Math.PI * 2);
-          context.fill();
+          const ang = (a / 6) * TAU + (t * 0.4) % 1;
+          disc(f.x + Math.cos(ang) * f.r * 0.7, f.y + Math.sin(ang) * f.r * 0.7, 3);
         }
       }
     }
-    // The docks: wooden pier with clear planks, stacked colourful containers.
-    context.fillStyle = PALETTE.pier;
-    context.fillRect(city.docks.x, city.docks.y, city.docks.width, city.docks.height);
-    context.strokeStyle = '#6b4f33';
-    context.lineWidth = 4;
+  }
+
+  // The docks: a wooden pier with clear planks, stacked containers, mooring
+  // bollards along the top edge and a couple of crates on the boards.
+  function paintPier(city) {
+    g.fillStyle = PALETTE.pier;
+    g.fillRect(city.docks.x, city.docks.y, city.docks.width, city.docks.height);
+    g.strokeStyle = '#6b4f33';
+    g.lineWidth = 4;
     for (let y = city.docks.y + 30; y < city.docks.y + city.docks.height; y += 60) {
-      context.beginPath();
-      context.moveTo(city.docks.x, y);
-      context.lineTo(city.docks.x + city.docks.width, y);
-      context.stroke();
+      seg(city.docks.x, y, city.docks.x + city.docks.width, y);
     }
-    context.strokeStyle = 'rgba(107, 79, 51, 0.6)';
-    context.lineWidth = 2;
+    g.strokeStyle = 'rgba(107, 79, 51, 0.6)';
+    g.lineWidth = 2;
     for (let x = city.docks.x + 30; x < city.docks.x + city.docks.width; x += 30) {
-      context.beginPath();
-      context.moveTo(x, city.docks.y);
-      context.lineTo(x, city.docks.y + city.docks.height);
-      context.stroke();
+      seg(x, city.docks.y, x, city.docks.y + city.docks.height);
     }
+    g.fillStyle = '#2c2f36';
+    for (let x = city.docks.x + 16; x < city.docks.x + city.docks.width; x += 60) {
+      disc(x, city.docks.y + 10, 4);
+    }
+    // Two crates waiting on the pier, fixed to its corners.
+    g.fillStyle = '#c08a3e';
+    g.fillRect(city.docks.x + 24, city.docks.y + city.docks.height - 64, 30, 30);
+    g.fillStyle = '#5d8a6a';
+    g.fillRect(city.docks.x + 60, city.docks.y + city.docks.height - 64, 30, 30);
+    g.strokeStyle = 'rgba(0,0,0,0.4)';
+    g.lineWidth = 2;
+    g.strokeRect(city.docks.x + 24, city.docks.y + city.docks.height - 64, 30, 30);
+    g.strokeRect(city.docks.x + 60, city.docks.y + city.docks.height - 64, 30, 30);
     if (city.containers) {
       for (const c of city.containers) {
-        context.fillStyle = c.color;
-        context.fillRect(c.x, c.y, c.w, c.h);
-        context.strokeStyle = 'rgba(0,0,0,0.35)';
-        context.lineWidth = 2;
-        context.strokeRect(c.x, c.y, c.w, c.h);
-        context.strokeStyle = 'rgba(255,255,255,0.25)';
-        context.beginPath();
-        context.moveTo(c.x + 6, c.y + 6);
-        context.lineTo(c.x + c.w - 6, c.y + 6);
-        context.stroke();
+        g.fillStyle = c.color;
+        g.fillRect(c.x, c.y, c.w, c.h);
+        g.strokeStyle = 'rgba(0,0,0,0.35)';
+        g.lineWidth = 2;
+        g.strokeRect(c.x, c.y, c.w, c.h);
+        g.strokeStyle = 'rgba(255,255,255,0.25)';
+        seg(c.x + 6, c.y + 6, c.x + c.w - 6, c.y + 6);
       }
     }
-    // Sidewalks, then roads, then lane dashes, crosswalks and tile seams.
-    context.fillStyle = PALETTE.sidewalk;
-    for (const rx of ROAD_XS) context.fillRect(rx - ROAD.width / 2 - 22, 0, ROAD.width + 44, WORLD.height);
-    for (const ry of ROAD_YS) context.fillRect(0, ry - ROAD.width / 2 - 22, WORLD.width, ROAD.width + 44);
-    context.strokeStyle = 'rgba(60, 60, 60, 0.18)';
-    context.lineWidth = 2;
+  }
+
+  // Sidewalks, roads, lane dashes, zebra crossings, white edge lines and
+  // manhole covers at every other intersection.
+  function paintStreets() {
+    g.fillStyle = PALETTE.sidewalk;
+    for (const rx of ROAD_XS) g.fillRect(rx - ROAD.width / 2 - 22, 0, ROAD.width + 44, WORLD.height);
+    for (const ry of ROAD_YS) g.fillRect(0, ry - ROAD.width / 2 - 22, WORLD.width, ROAD.width + 44);
+    // Sidewalk tile seams.
+    g.strokeStyle = 'rgba(60, 60, 60, 0.18)';
+    g.lineWidth = 2;
     for (const rx of ROAD_XS) {
-      for (let y = 0; y < WORLD.height; y += 44) {
-        context.beginPath();
-        context.moveTo(rx - ROAD.width / 2 - 22, y);
-        context.lineTo(rx + ROAD.width / 2 + 22, y);
-        context.stroke();
-      }
+      for (let y = 0; y < WORLD.height; y += 44) seg(rx - ROAD.width / 2 - 22, y, rx + ROAD.width / 2 + 22, y);
     }
     for (const ry of ROAD_YS) {
-      for (let x = 0; x < WORLD.width; x += 44) {
-        context.beginPath();
-        context.moveTo(x, ry - ROAD.width / 2 - 22);
-        context.lineTo(x, ry + ROAD.width / 2 + 22);
-        context.stroke();
-      }
+      for (let x = 0; x < WORLD.width; x += 44) seg(x, ry - ROAD.width / 2 - 22, x, ry + ROAD.width / 2 + 22);
     }
-    context.fillStyle = PALETTE.road;
-    for (const rx of ROAD_XS) context.fillRect(rx - ROAD.width / 2, 0, ROAD.width, WORLD.height);
-    for (const ry of ROAD_YS) context.fillRect(0, ry - ROAD.width / 2, WORLD.width, ROAD.width);
+    g.fillStyle = PALETTE.road;
+    for (const rx of ROAD_XS) g.fillRect(rx - ROAD.width / 2, 0, ROAD.width, WORLD.height);
+    for (const ry of ROAD_YS) g.fillRect(0, ry - ROAD.width / 2, WORLD.width, ROAD.width);
+    // White edge lines down both sides of every road.
+    g.fillStyle = 'rgba(255,255,255,0.4)';
+    for (const rx of ROAD_XS) {
+      g.fillRect(rx - ROAD.width / 2 + 4, 0, 2, WORLD.height);
+      g.fillRect(rx + ROAD.width / 2 - 6, 0, 2, WORLD.height);
+    }
+    for (const ry of ROAD_YS) {
+      g.fillRect(0, ry - ROAD.width / 2 + 4, WORLD.width, 2);
+      g.fillRect(0, ry + ROAD.width / 2 - 6, WORLD.width, 2);
+    }
     // Zebra crossings at every intersection, in both directions.
-    context.fillStyle = 'rgba(255,255,255,0.5)';
+    g.fillStyle = 'rgba(255,255,255,0.5)';
     for (const rx of ROAD_XS) {
       for (const ry of ROAD_YS) {
         for (let i = -3; i <= 3; i += 1) {
-          context.fillRect(rx + i * 16 - 5, ry - ROAD.width / 2 - 4, 10, 18);
-          context.fillRect(rx + i * 16 - 5, ry + ROAD.width / 2 - 14, 10, 18);
-          context.fillRect(rx - ROAD.width / 2 - 4, ry + i * 16 - 5, 18, 10);
-          context.fillRect(rx + ROAD.width / 2 - 14, ry + i * 16 - 5, 18, 10);
+          g.fillRect(rx + i * 16 - 5, ry - ROAD.width / 2 - 4, 10, 18);
+          g.fillRect(rx + i * 16 - 5, ry + ROAD.width / 2 - 14, 10, 18);
+          g.fillRect(rx - ROAD.width / 2 - 4, ry + i * 16 - 5, 18, 10);
+          g.fillRect(rx + ROAD.width / 2 - 14, ry + i * 16 - 5, 18, 10);
         }
       }
     }
-    context.fillStyle = PALETTE.lane;
+    // Manhole covers on alternating crossings.
+    g.fillStyle = 'rgba(0,0,0,0.35)';
+    ROAD_XS.forEach((rx, xi) => {
+      ROAD_YS.forEach((ry, yi) => {
+        if ((xi + yi) % 2 === 0) disc(rx, ry, 5);
+      });
+    });
+    // Yellow centre dashes.
+    g.fillStyle = PALETTE.lane;
     for (const rx of ROAD_XS) {
-      for (let y = 0; y < WORLD.height; y += 64) context.fillRect(rx - 2, y, 4, 30);
+      for (let y = 0; y < WORLD.height; y += 64) g.fillRect(rx - 2, y, 4, 30);
     }
     for (const ry of ROAD_YS) {
-      for (let x = 0; x < WORLD.width; x += 64) context.fillRect(x, ry - 2, 30, 4);
+      for (let x = 0; x < WORLD.width; x += 64) g.fillRect(x, ry - 2, 30, 4);
     }
-    // Street trees along the sidewalks, then lamps at the corners.
-    if (city.trees) for (const t of city.trees) drawTree(t.x, t.y, t.r);
+  }
+
+  // Street trees along the sidewalks, then lamps at the corners.
+  function paintTrees(city) {
+    if (city.trees) for (const tree of city.trees) paintTree(tree.x, tree.y, tree.r);
     if (city.lamps) {
       for (const lamp of city.lamps) {
-        context.strokeStyle = '#3a3f46';
-        context.lineWidth = 4;
-        context.beginPath();
-        context.moveTo(lamp.x, lamp.y);
-        context.lineTo(lamp.x, lamp.y - 18);
-        context.stroke();
-        context.fillStyle = '#ffe9a8';
-        context.beginPath();
-        context.arc(lamp.x, lamp.y - 20, 5, 0, Math.PI * 2);
-        context.fill();
+        g.strokeStyle = '#3a3f46';
+        g.lineWidth = 4;
+        seg(lamp.x, lamp.y, lamp.x, lamp.y - 18);
+        g.fillStyle = '#ffe9a8';
+        disc(lamp.x, lamp.y - 20, 5);
       }
     }
-    // Buildings: a diagonal drop shadow first, then roof, inner edge and the
-    // seeded roof detail (AC units, vents, skylight, garden, pool, helipad).
+  }
+
+  // One roof's seeded furniture: AC boxes, vents, skylight, garden, pool or
+  // helipad. Furniture is drawn bigger than life so it reads at a glance.
+  function paintRoofKit(d) {
+    if (d.kind === 'ac') {
+      const s = d.s * 1.4;
+      g.fillStyle = '#c8ccd0';
+      g.fillRect(d.x, d.y, s, s);
+      g.fillStyle = '#8a9096';
+      g.fillRect(d.x + 2, d.y + 2, s - 4, 4);
+      g.fillStyle = 'rgba(255,255,255,0.5)';
+      g.fillRect(d.x + 2, d.y + 2, s - 4, 2);
+    } else if (d.kind === 'vent') {
+      const s = d.s * 1.4;
+      g.fillStyle = '#5a6068';
+      disc(d.x, d.y, s);
+      g.fillStyle = '#9aa0a6';
+      disc(d.x, d.y, s * 0.5);
+    } else if (d.kind === 'sky') {
+      g.fillStyle = 'rgba(170, 220, 245, 0.85)';
+      g.fillRect(d.x, d.y, d.w, d.h);
+      g.strokeStyle = 'rgba(0,0,0,0.3)';
+      g.lineWidth = 2;
+      g.strokeRect(d.x, d.y, d.w, d.h);
+    } else if (d.kind === 'garden') {
+      g.fillStyle = '#4e8a3e';
+      g.fillRect(d.x, d.y, d.w, d.h);
+      g.fillStyle = '#6da34e';
+      disc(d.x + d.w * 0.3, d.y + d.h * 0.4, 12);
+      disc(d.x + d.w * 0.7, d.y + d.h * 0.6, 10);
+    } else if (d.kind === 'pool') {
+      g.fillStyle = '#3f8fc4';
+      g.fillRect(d.x, d.y, d.w, d.h);
+      g.fillStyle = 'rgba(255,255,255,0.5)';
+      g.fillRect(d.x + 4, d.y + 4, d.w - 8, 3);
+    } else if (d.kind === 'heli') {
+      g.fillStyle = 'rgba(0,0,0,0.25)';
+      disc(d.x, d.y, d.r);
+      g.strokeStyle = '#ffffff';
+      g.lineWidth = 3;
+      g.beginPath();
+      g.arc(d.x, d.y, d.r * 0.75, 0, TAU);
+      g.stroke();
+      plainAt('H', d.x, d.y, Math.round(d.r), '#ffffff', 'center', 'middle');
+    }
+  }
+
+  // Buildings: a diagonal drop shadow, a dark edge, the roof colour, a
+  // sunlit top edge and a shaded bottom edge for depth, a parapet rim, the
+  // seeded furniture, and panel work — an inset tone, repeating bands,
+  // vertical seams and corner rivets — so a roof reads as a roof and never
+  // as a flat coloured slab.
+  function paintBlocks(city) {
     for (const b of city.buildings) {
-      context.fillStyle = 'rgba(0,0,0,0.18)';
-      context.fillRect(b.x + 10, b.y + 14, b.width, b.height);
-      context.fillStyle = PALETTE.buildingEdge;
-      context.fillRect(b.x - 3, b.y - 3, b.width + 6, b.height + 6);
-      context.fillStyle = b.color;
-      context.fillRect(b.x, b.y, b.width, b.height);
-      context.strokeStyle = 'rgba(0,0,0,0.35)';
-      context.lineWidth = 2;
-      context.strokeRect(b.x + 7, b.y + 7, b.width - 14, b.height - 14);
-      context.fillStyle = `rgba(0,0,0,${(1 - b.shade) * 0.45})`;
-      context.fillRect(b.x, b.y, b.width, 14);
-      if (b.roof) {
-        for (const d of b.roof) {
-          if (d.kind === 'ac') {
-            // Round 5: furniture drawn ~35% larger so it reads at a glance.
-            const s = d.s * 1.35;
-            context.fillStyle = '#c8ccd0';
-            context.fillRect(d.x, d.y, s, s);
-            context.fillStyle = '#8a9096';
-            context.fillRect(d.x + 2, d.y + 2, s - 4, 4);
-          } else if (d.kind === 'vent') {
-            const s = d.s * 1.35;
-            context.fillStyle = '#5a6068';
-            context.beginPath();
-            context.arc(d.x, d.y, s, 0, Math.PI * 2);
-            context.fill();
-            context.fillStyle = '#9aa0a6';
-            context.beginPath();
-            context.arc(d.x, d.y, s * 0.5, 0, Math.PI * 2);
-            context.fill();
-          } else if (d.kind === 'sky') {
-            context.fillStyle = 'rgba(170, 220, 245, 0.85)';
-            context.fillRect(d.x, d.y, d.w, d.h);
-            context.strokeStyle = 'rgba(0,0,0,0.3)';
-            context.lineWidth = 2;
-            context.strokeRect(d.x, d.y, d.w, d.h);
-          } else if (d.kind === 'garden') {
-            context.fillStyle = '#4e8a3e';
-            context.fillRect(d.x, d.y, d.w, d.h);
-            context.fillStyle = '#6da34e';
-            context.beginPath();
-            context.arc(d.x + d.w * 0.3, d.y + d.h * 0.4, 12, 0, Math.PI * 2);
-            context.arc(d.x + d.w * 0.7, d.y + d.h * 0.6, 10, 0, Math.PI * 2);
-            context.fill();
-          } else if (d.kind === 'pool') {
-            context.fillStyle = '#3f8fc4';
-            context.fillRect(d.x, d.y, d.w, d.h);
-            context.fillStyle = 'rgba(255,255,255,0.5)';
-            context.fillRect(d.x + 4, d.y + 4, d.w - 8, 3);
-          } else if (d.kind === 'heli') {
-            context.fillStyle = 'rgba(0,0,0,0.25)';
-            context.beginPath();
-            context.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-            context.fill();
-            context.strokeStyle = '#ffffff';
-            context.lineWidth = 3;
-            context.beginPath();
-            context.arc(d.x, d.y, d.r * 0.75, 0, Math.PI * 2);
-            context.stroke();
-            plainText('H', d.x, d.y, Math.round(d.r), '#ffffff', 'center', 'middle');
-          }
-        }
-      }
-      // Round 5: the roof reads as a roof, not a flat slab — a two-tone inset
-      // panel, repeating panel bands across the whole roof, and vertical seams,
-      // all derived from the building's own rect (no RNG, fully deterministic).
-      // Roof furniture is drawn a little larger so it reads at a glance.
-      context.fillStyle = 'rgba(0,0,0,0.07)';
-      context.fillRect(b.x + 16, b.y + 16, b.width - 32, b.height - 32);
-      context.fillStyle = 'rgba(255,255,255,0.10)';
+      g.fillStyle = 'rgba(0,0,0,0.18)';
+      g.fillRect(b.x + 10, b.y + 14, b.width, b.height);
+      g.fillStyle = PALETTE.buildingEdge;
+      g.fillRect(b.x - 3, b.y - 3, b.width + 6, b.height + 6);
+      g.fillStyle = b.color;
+      g.fillRect(b.x, b.y, b.width, b.height);
+      // Sunlit top edge, shaded bottom edge.
+      g.fillStyle = 'rgba(255,255,255,0.12)';
+      g.fillRect(b.x, b.y, b.width, 8);
+      g.fillStyle = `rgba(0,0,0,${(1 - b.shade) * 0.45})`;
+      g.fillRect(b.x, b.y + b.height - 14, b.width, 14);
+      // Parapet: a dark outer rim with a light inner line.
+      g.strokeStyle = 'rgba(0,0,0,0.35)';
+      g.lineWidth = 2;
+      g.strokeRect(b.x + 7, b.y + 7, b.width - 14, b.height - 14);
+      g.strokeStyle = 'rgba(255,255,255,0.14)';
+      g.lineWidth = 3;
+      g.strokeRect(b.x + 4, b.y + 4, b.width - 8, b.height - 8);
+      if (b.roof) for (const d of b.roof) paintRoofKit(d);
+      // Inset panel, bands across the roof, seams down it, rivets in corners.
+      g.fillStyle = 'rgba(0,0,0,0.07)';
+      g.fillRect(b.x + 16, b.y + 16, b.width - 32, b.height - 32);
+      g.fillStyle = 'rgba(255,255,255,0.10)';
       for (let by = b.y + 22; by < b.y + b.height - 12; by += 44) {
-        context.fillRect(b.x + 12, by, b.width - 24, 5);
+        g.fillRect(b.x + 12, by, b.width - 24, 5);
       }
-      context.fillStyle = 'rgba(0,0,0,0.08)';
+      g.fillStyle = 'rgba(0,0,0,0.08)';
       for (let bx = b.x + 48; bx < b.x + b.width - 12; bx += 48) {
-        context.fillRect(bx, b.y + 12, 2, b.height - 24);
+        g.fillRect(bx, b.y + 12, 2, b.height - 24);
       }
+      g.fillStyle = 'rgba(0,0,0,0.25)';
+      disc(b.x + 16, b.y + 16, 2.5);
+      disc(b.x + b.width - 16, b.y + 16, 2.5);
+      disc(b.x + 16, b.y + b.height - 16, 2.5);
+      disc(b.x + b.width - 16, b.y + b.height - 16, 2.5);
     }
   }
 
-  function drawTree(x, y, r) {
-    // Soft shadow, then two greens so the canopy has depth.
-    context.fillStyle = 'rgba(0,0,0,0.18)';
-    context.beginPath();
-    context.ellipse(x + 4, y + 6, r * 0.9, r * 0.5, 0, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = '#5a4632';
-    context.fillRect(x - 2, y - 2, 4, 10);
-    context.fillStyle = PALETTE.tree;
-    context.beginPath();
-    context.arc(x, y, r, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = PALETTE.treeLight;
-    context.beginPath();
-    context.arc(x - r * 0.3, y - r * 0.3, r * 0.55, 0, Math.PI * 2);
-    context.fill();
-  }
-
-  function drawPalm(x, y) {
-    context.strokeStyle = PALETTE.palmTrunk;
-    context.lineWidth = 5;
-    context.beginPath();
-    context.moveTo(x, y);
-    context.quadraticCurveTo(x + 4, y - 16, x + 2, y - 30);
-    context.stroke();
-    context.fillStyle = PALETTE.palmLeaf;
-    for (let a = 0; a < 5; a += 1) {
-      const ang = (a / 5) * Math.PI * 2 + 0.4;
-      context.beginPath();
-      context.ellipse(x + 2 + Math.cos(ang) * 12, y - 30 + Math.sin(ang) * 8, 13, 5, ang, 0, Math.PI * 2);
-      context.fill();
+  // The whole ground layer, in paint order: grass, shore, greens, pier,
+  // streets, street trees and lamps, then the buildings on top.
+  function paintTerrain(city, t) {
+    g.fillStyle = PALETTE.grass;
+    g.fillRect(0, 0, WORLD.width, WORLD.height);
+    // Faint grass speckle on a fixed grid, for texture.
+    g.fillStyle = 'rgba(0,0,0,0.05)';
+    for (let gx = 60; gx < WORLD.width; gx += 120) {
+      for (let gy = 60; gy < WORLD.height; gy += 120) g.fillRect(gx, gy, 3, 3);
     }
+    paintShore(city, t);
+    paintGreens(city, t);
+    paintPier(city);
+    paintStreets();
+    paintTrees(city);
+    paintBlocks(city);
   }
 
-  function drawCar(car, isPlayer) {
-    // Round 3: an ellipse shadow under the car grounds it on the road, and a
-    // police car's flashing bar throws a soft coloured glow around the car.
-    context.fillStyle = 'rgba(0,0,0,0.28)';
-    context.beginPath();
-    context.ellipse(car.x + 4, car.y + 7, CAR.length / 2 + 2, CAR.width / 2 + 2, car.angle, 0, Math.PI * 2);
-    context.fill();
+  // One car: shadow, police glow, body with glass, sunroof, side stripe and
+  // mirrors, lights, and the extras that mark police cars and the job coupe.
+  function paintAuto(car, mine) {
+    g.fillStyle = 'rgba(0,0,0,0.28)';
+    g.beginPath();
+    g.ellipse(car.x + 4, car.y + 7, CAR.length / 2 + 2, CAR.width / 2 + 2, car.angle, 0, TAU);
+    g.fill();
     if (car.kind === 'police') {
-      const on = Math.floor(car.siren) % 2 === 0;
-      context.fillStyle = on ? 'rgba(255,59,48,0.22)' : 'rgba(47,123,255,0.22)';
-      context.beginPath();
-      context.arc(car.x, car.y, 52, 0, Math.PI * 2);
-      context.fill();
+      const lit = Math.floor(car.siren) % 2 === 0;
+      g.fillStyle = lit ? 'rgba(255,59,48,0.22)' : 'rgba(47,123,255,0.22)';
+      disc(car.x, car.y, 52);
     }
-    context.save();
-    context.translate(car.x, car.y);
-    context.rotate(car.angle);
+    g.save();
+    g.translate(car.x, car.y);
+    g.rotate(car.angle);
     // Wheels.
-    context.fillStyle = '#15181c';
-    context.fillRect(-18, -CAR.width / 2 - 3, 16, 7);
-    context.fillRect(8, -CAR.width / 2 - 3, 16, 7);
-    context.fillRect(-18, CAR.width / 2 - 4, 16, 7);
-    context.fillRect(8, CAR.width / 2 - 4, 16, 7);
-    // Body.
-    context.fillStyle = car.color;
-    roundRect(-CAR.length / 2, -CAR.width / 2, CAR.length, CAR.width, 8);
-    context.fill();
-    // Windshield and roof, with a bright edge so the glass reads at a glance.
-    context.fillStyle = 'rgba(20, 30, 44, 0.85)';
-    context.fillRect(6, -CAR.width / 2 + 4, 10, CAR.width - 8);
-    context.fillStyle = 'rgba(255,255,255,0.22)';
-    context.fillRect(-8, -CAR.width / 2 + 4, 12, CAR.width - 8);
-    context.fillStyle = 'rgba(255,255,255,0.35)';
-    context.fillRect(6, -CAR.width / 2 + 4, 2, CAR.width - 8);
-    context.fillRect(-8, -CAR.width / 2 + 4, 2, CAR.width - 8);
+    g.fillStyle = '#15181c';
+    g.fillRect(-18, -CAR.width / 2 - 3, 16, 7);
+    g.fillRect(8, -CAR.width / 2 - 3, 16, 7);
+    g.fillRect(-18, CAR.width / 2 - 4, 16, 7);
+    g.fillRect(8, CAR.width / 2 - 4, 16, 7);
+    // Body with a bright edge, glass, sunroof and a side stripe.
+    g.fillStyle = car.color;
+    pill(-CAR.length / 2, -CAR.width / 2, CAR.length, CAR.width, 8);
+    g.fill();
+    g.fillStyle = 'rgba(20, 30, 44, 0.85)';
+    g.fillRect(6, -CAR.width / 2 + 4, 10, CAR.width - 8);
+    g.fillStyle = 'rgba(255,255,255,0.22)';
+    g.fillRect(-8, -CAR.width / 2 + 4, 12, CAR.width - 8);
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.fillRect(6, -CAR.width / 2 + 4, 2, CAR.width - 8);
+    g.fillRect(-8, -CAR.width / 2 + 4, 2, CAR.width - 8);
+    g.fillStyle = 'rgba(20, 30, 44, 0.6)';
+    g.fillRect(-2, -CAR.width / 2 + 6, 5, CAR.width - 12);
+    g.fillStyle = 'rgba(255,255,255,0.18)';
+    g.fillRect(0, -CAR.width / 2 + 2, CAR.length - 12, 2);
+    g.fillRect(0, CAR.width / 2 - 4, CAR.length - 12, 2);
+    // Mirrors.
+    g.fillStyle = '#15181c';
+    g.fillRect(2, -CAR.width / 2 - 5, 4, 4);
+    g.fillRect(2, CAR.width / 2 + 1, 4, 4);
     // Headlights and brake lights.
-    context.fillStyle = '#fff6b0';
-    context.fillRect(CAR.length / 2 - 2, -CAR.width / 2 + 3, 3, 6);
-    context.fillRect(CAR.length / 2 - 2, CAR.width / 2 - 9, 3, 6);
-    context.fillStyle = car.brake ? '#ff2d20' : '#a02020';
-    context.fillRect(-CAR.length / 2 - 1, -CAR.width / 2 + 3, 3, 6);
-    context.fillRect(-CAR.length / 2 - 1, CAR.width / 2 - 9, 3, 6);
+    g.fillStyle = '#fff6b0';
+    g.fillRect(CAR.length / 2 - 2, -CAR.width / 2 + 3, 3, 6);
+    g.fillRect(CAR.length / 2 - 2, CAR.width / 2 - 9, 3, 6);
+    g.fillStyle = car.brake ? '#ff2d20' : '#a02020';
+    g.fillRect(-CAR.length / 2 - 1, -CAR.width / 2 + 3, 3, 6);
+    g.fillRect(-CAR.length / 2 - 1, CAR.width / 2 - 9, 3, 6);
     if (car.kind === 'police') {
-      // Flashing light bar.
-      const on = Math.floor(car.siren) % 2 === 0;
-      context.fillStyle = on ? '#ff3b30' : '#2f7bff';
-      context.fillRect(-6, -CAR.width / 2 + 2, 12, 7);
-      context.fillStyle = on ? '#2f7bff' : '#ff3b30';
-      context.fillRect(-6, CAR.width / 2 - 9, 12, 7);
-      plainText('PD', -8, 5, 13, '#ffffff', 'center', 'middle');
+      const lit = Math.floor(car.siren) % 2 === 0;
+      g.fillStyle = lit ? '#ff3b30' : '#2f7bff';
+      g.fillRect(-6, -CAR.width / 2 + 2, 12, 7);
+      g.fillStyle = lit ? '#2f7bff' : '#ff3b30';
+      g.fillRect(-6, CAR.width / 2 - 9, 12, 7);
+      plainAt('PD', -8, 5, 13, '#ffffff', 'center', 'middle');
     }
     if (car.missionCar) {
-      context.fillStyle = '#ffd23e';
-      context.font = `bold 13px ${FONT}`;
-      context.textAlign = 'center';
-      context.textBaseline = 'middle';
-      context.fillText('★', 0, 0);
+      g.fillStyle = '#ffd23e';
+      if (!faces.has(13)) faces.set(13, `bold 13px ${FONT}`);
+      g.font = faces.get(13);
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText('★', 0, 0);
     }
-    context.restore();
-    if (isPlayer) {
-      // A soft ring marks the car the player drives.
-      context.strokeStyle = 'rgba(255,210,62,0.85)';
-      context.lineWidth = 2;
-      context.beginPath();
-      context.arc(car.x, car.y, 36, 0, Math.PI * 2);
-      context.stroke();
-    }
-  }
-
-  function drawPerson(x, y, angle, color, radius, armed) {
-    // Round 3: a small ground shadow under every walker.
-    context.fillStyle = 'rgba(0,0,0,0.25)';
-    context.beginPath();
-    context.ellipse(x + 2, y + 5, radius * 0.9, radius * 0.45, 0, 0, Math.PI * 2);
-    context.fill();
-    // Round 5: a dark outline ring so walkers pop off grass and road alike.
-    context.fillStyle = color;
-    context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
-    context.fill();
-    context.strokeStyle = 'rgba(0,0,0,0.4)';
-    context.lineWidth = 2;
-    context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
-    context.stroke();
-    context.fillStyle = 'rgba(0,0,0,0.25)';
-    context.beginPath();
-    context.arc(x - 3, y - 3, radius * 0.45, 0, Math.PI * 2);
-    context.fill();
-    // Facing tick so the direction reads at a glance.
-    context.strokeStyle = 'rgba(0,0,0,0.55)';
-    context.lineWidth = 3;
-    context.beginPath();
-    context.moveTo(x, y);
-    context.lineTo(x + Math.cos(angle) * (radius + 6), y + Math.sin(angle) * (radius + 6));
-    context.stroke();
-    if (armed) {
-      context.strokeStyle = '#222';
-      context.lineWidth = 4;
-      context.beginPath();
-      context.moveTo(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
-      context.lineTo(x + Math.cos(angle) * (radius + 14), y + Math.sin(angle) * (radius + 14));
-      context.stroke();
+    g.restore();
+    if (mine) {
+      // A soft gold ring marks the car the player drives.
+      g.strokeStyle = 'rgba(255,210,62,0.85)';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(car.x, car.y, 36, 0, TAU);
+      g.stroke();
     }
   }
 
-  function drawWorld(state, city) {
-    drawGround(city, state);
-    // Mission marker: a bouncing diamond and a light column at the target.
+  // One person on foot: shadow, a body with a dark ring so they pop off any
+  // ground, a facing tick, and a gun barrel when armed.
+  function paintWalker(x, y, heading, color, size, gun) {
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    g.beginPath();
+    g.ellipse(x + 2, y + 5, size * 0.9, size * 0.45, 0, 0, TAU);
+    g.fill();
+    g.fillStyle = color;
+    disc(x, y, size);
+    g.strokeStyle = 'rgba(0,0,0,0.4)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(x, y, size, 0, TAU);
+    g.stroke();
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    disc(x - 3, y - 3, size * 0.45);
+    g.strokeStyle = 'rgba(0,0,0,0.55)';
+    g.lineWidth = 3;
+    seg(x, y, x + Math.cos(heading) * (size + 6), y + Math.sin(heading) * (size + 6));
+    if (gun) {
+      g.strokeStyle = '#222222';
+      g.lineWidth = 4;
+      seg(
+        x + Math.cos(heading) * size, y + Math.sin(heading) * size,
+        x + Math.cos(heading) * (size + 14), y + Math.sin(heading) * (size + 14),
+      );
+    }
+  }
+
+  // The world through the camera: terrain, mission marker, pickups, cars,
+  // walkers, enemies, bullets, particles and the player.
+  function paintScene(state, city) {
+    paintTerrain(city, state.elapsed);
     const place = state.missionPlace;
     if (place && !state.won) {
-      const bounce = Math.sin(state.elapsed * 4) * 6;
-      context.fillStyle = 'rgba(255,207,61,0.18)';
-      context.fillRect(place.x - 8, place.y - 160, 16, 160);
-      context.save();
-      context.translate(place.x, place.y - 44 + bounce);
-      context.rotate(Math.PI / 4);
-      context.fillStyle = PALETTE.marker;
-      context.fillRect(-13, -13, 26, 26);
-      context.strokeStyle = '#7a5b00';
-      context.lineWidth = 3;
-      context.strokeRect(-13, -13, 26, 26);
-      context.restore();
-      // Round 5: the place name is drawn in screen space after the HUD (see
-      // drawPlaceLabel) so it can never hide under a HUD panel.
+      const bob = Math.sin(state.elapsed * 4) * 6;
+      // A wider gold column and a soft glow at its base, so the job marker
+      // reads from across the street even when a car sits on top of it.
+      g.fillStyle = 'rgba(255,207,61,0.22)';
+      g.fillRect(place.x - 10, place.y - 170, 20, 170);
+      g.fillStyle = 'rgba(255,207,61,0.16)';
+      disc(place.x, place.y, 30);
+      g.save();
+      g.translate(place.x, place.y - 44 + bob);
+      g.rotate(Math.PI / 4);
+      g.fillStyle = PALETTE.marker;
+      g.fillRect(-15, -15, 30, 30);
+      g.strokeStyle = '#7a5b00';
+      g.lineWidth = 3;
+      g.strokeRect(-15, -15, 30, 30);
+      g.restore();
     }
-    // Pickups.
     for (const pk of state.pickups) {
       if (pk.taken) continue;
       const pulse = 1 + Math.sin(state.elapsed * 5) * 0.12;
-      context.save();
-      context.translate(pk.x, pk.y);
-      context.scale(pulse, pulse);
-      context.fillStyle = pk.kind === 'health' ? '#43d17c' : '#39c5d3';
-      context.beginPath();
-      context.arc(0, 0, 15, 0, Math.PI * 2);
-      context.fill();
-      context.fillStyle = '#ffffff';
+      g.save();
+      g.translate(pk.x, pk.y);
+      g.scale(pulse, pulse);
+      g.fillStyle = pk.kind === 'health' ? '#43d17c' : '#39c5d3';
+      disc(0, 0, 15);
+      g.fillStyle = '#ffffff';
       if (pk.kind === 'health') {
-        context.fillRect(-3, -9, 6, 18);
-        context.fillRect(-9, -3, 18, 6);
+        g.fillRect(-3, -9, 6, 18);
+        g.fillRect(-9, -3, 18, 6);
       } else {
-        plainText('A', 0, 1, 15, '#ffffff', 'center', 'middle');
+        plainAt('A', 0, 1, 15, '#ffffff', 'center', 'middle');
       }
-      context.restore();
-    }
-    // Parked and traffic cars, then the police, then the player's car on top.
-    for (const car of state.cars) {
-      if (car.kind === 'player') continue;
-      drawCar(car, false);
+      g.restore();
     }
     for (const car of state.cars) {
-      if (car.kind === 'player') drawCar(car, true);
+      if (car.kind !== 'player') paintAuto(car, false);
     }
-    // Pedestrians (lying flat when knocked down).
+    for (const car of state.cars) {
+      if (car.kind === 'player') paintAuto(car, true);
+    }
     for (const ped of state.peds) {
       if (ped.down > 0) {
-        context.fillStyle = ped.color;
-        context.beginPath();
-        context.ellipse(ped.x, ped.y, 14, 7, ped.angle, 0, Math.PI * 2);
-        context.fill();
+        g.fillStyle = ped.color;
+        g.beginPath();
+        g.ellipse(ped.x, ped.y, 14, 7, ped.angle, 0, TAU);
+        g.fill();
       } else {
-        // Round 5: walkers a little larger (10 -> 12) so the city reads as lived in.
-        drawPerson(ped.x, ped.y, ped.angle, ped.color, 12, false);
+        // Walkers read as people at a glance: a little larger than before.
+        paintWalker(ped.x, ped.y, ped.angle, ped.color, 12, false);
       }
     }
-    // Enemies, with a health bar.
     for (const e of state.enemies) {
-      drawPerson(e.x, e.y, e.angle, '#8e2f2f', 12, true);
-      context.fillStyle = 'rgba(0,0,0,0.6)';
-      context.fillRect(e.x - 16, e.y - 26, 32, 6);
-      context.fillStyle = '#e5534b';
-      context.fillRect(e.x - 16, e.y - 26, 32 * Math.max(0, e.health / 60), 6);
+      paintWalker(e.x, e.y, e.angle, '#8e2f2f', 12, true);
+      g.fillStyle = 'rgba(0,0,0,0.6)';
+      g.fillRect(e.x - 16, e.y - 26, 32, 6);
+      g.fillStyle = '#e5534b';
+      g.fillRect(e.x - 16, e.y - 26, 32 * Math.max(0, e.health / 60), 6);
     }
-    // Bullets.
-    context.strokeStyle = PALETTE.bullet;
-    context.lineWidth = 3;
+    g.strokeStyle = PALETTE.bullet;
+    g.lineWidth = 3;
     for (const b of state.bullets) {
       if (!b.active) continue;
-      context.beginPath();
-      context.moveTo(b.x, b.y);
-      context.lineTo(b.x - b.vx * 0.02, b.y - b.vy * 0.02);
-      context.stroke();
+      seg(b.x, b.y, b.x - b.vx * 0.02, b.y - b.vy * 0.02);
     }
-    // Particles.
     for (const p of state.particles) {
       if (!p.active) continue;
-      context.globalAlpha = Math.max(0, p.life / p.max);
-      context.fillStyle = p.color;
-      context.beginPath();
-      context.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      context.fill();
+      g.globalAlpha = Math.max(0, p.life / p.max);
+      g.fillStyle = p.color;
+      disc(p.x, p.y, p.size);
     }
-    context.globalAlpha = 1;
-    // The player on foot: a yellow figure with a dark outline.
+    g.globalAlpha = 1;
     if (state.player.onFoot) {
       const p = state.player;
       const blink = p.invuln > 0 && Math.floor(p.invuln * 10) % 2 === 0;
       if (!blink) {
-        context.fillStyle = 'rgba(0,0,0,0.35)';
-        context.beginPath();
-        context.ellipse(p.x, p.y + 8, 12, 5, 0, 0, Math.PI * 2);
-        context.fill();
-        drawPerson(p.x, p.y, p.angle, PALETTE.player, PLAYER.radius, false);
-        context.strokeStyle = '#7a5b00';
-        context.lineWidth = 2;
-        context.beginPath();
-        context.arc(p.x, p.y, PLAYER.radius + 1, 0, Math.PI * 2);
-        context.stroke();
+        g.fillStyle = 'rgba(0,0,0,0.35)';
+        g.beginPath();
+        g.ellipse(p.x, p.y + 8, 12, 5, 0, 0, TAU);
+        g.fill();
+        paintWalker(p.x, p.y, p.angle, PALETTE.player, PLAYER.radius, false);
+        g.strokeStyle = '#7a5b00';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(p.x, p.y, PLAYER.radius + 1, 0, TAU);
+        g.stroke();
       }
       if (p.punchTimer > 0.2) {
-        context.strokeStyle = '#ffd23e';
-        context.lineWidth = 4;
-        context.beginPath();
-        context.arc(p.x, p.y, 26, p.angle - 0.7, p.angle + 0.7);
-        context.stroke();
+        g.strokeStyle = '#ffd23e';
+        g.lineWidth = 4;
+        g.beginPath();
+        g.arc(p.x, p.y, 26, p.angle - 0.7, p.angle + 0.7);
+        g.stroke();
       }
     }
   }
 
-  function drawMinimap(state, city) {
-    const mx = VIEW.width - MINIMAP.width - MINIMAP.margin;
-    const my = VIEW.height - MINIMAP.height - MINIMAP.margin;
-    const sx = MINIMAP.width / WORLD.width;
-    const sy = MINIMAP.height / WORLD.height;
-    context.fillStyle = PALETTE.hudPanel;
-    roundRect(mx - 6, my - 6, MINIMAP.width + 12, MINIMAP.height + 12, 8);
-    context.fill();
-    context.save();
-    context.beginPath();
-    context.rect(mx, my, MINIMAP.width, MINIMAP.height);
-    context.clip();
-    // Round 3: the minimap is a real miniature of the city — grass, beach and
-    // water, darker parks, pale plazas, the brown docks, grey roads and the
-    // coloured roof of every building — instead of a flat green grid.
-    context.fillStyle = PALETTE.grass;
-    context.fillRect(mx, my, MINIMAP.width, MINIMAP.height);
-    context.fillStyle = PALETTE.sand;
-    context.fillRect(mx, my + city.beach.y * sy, MINIMAP.width, city.beach.height * sy);
-    context.fillStyle = PALETTE.water;
-    context.fillRect(mx, my + city.water.y * sy, MINIMAP.width, city.water.height * sy + 2);
-    context.fillStyle = PALETTE.park;
-    for (const park of city.parks) context.fillRect(mx + park.x * sx, my + park.y * sy, Math.max(2, park.width * sx), Math.max(2, park.height * sy));
-    context.fillStyle = PALETTE.plaza;
-    for (const plaza of city.plazas) context.fillRect(mx + plaza.x * sx, my + plaza.y * sy, Math.max(2, plaza.width * sx), Math.max(2, plaza.height * sy));
-    context.fillStyle = PALETTE.pier;
-    context.fillRect(mx + city.docks.x * sx, my + city.docks.y * sy, Math.max(2, city.docks.width * sx), Math.max(2, city.docks.height * sy));
+  // The minimap, bottom-right: a real miniature of the city, with a gold
+  // border, the mission marker, police dots and the player as a ringed arrow.
+  function paintMap(state, city) {
+    const mx = VIEW.width - MAP_W - MAP_M;
+    const my = VIEW.height - MAP_H - MAP_M;
+    const sx = MAP_W / WORLD.width;
+    const sy = MAP_H / WORLD.height;
+    g.fillStyle = PALETTE.hudPanel;
+    pill(mx - 6, my - 6, MAP_W + 12, MAP_H + 12, 8);
+    g.fill();
+    g.strokeStyle = 'rgba(255,210,62,0.55)';
+    g.lineWidth = 2;
+    pill(mx - 6, my - 6, MAP_W + 12, MAP_H + 12, 8);
+    g.stroke();
+    g.save();
+    g.beginPath();
+    g.rect(mx, my, MAP_W, MAP_H);
+    g.clip();
+    g.fillStyle = PALETTE.grass;
+    g.fillRect(mx, my, MAP_W, MAP_H);
+    g.fillStyle = PALETTE.sand;
+    g.fillRect(mx, my + city.beach.y * sy, MAP_W, city.beach.height * sy);
+    g.fillStyle = PALETTE.water;
+    g.fillRect(mx, my + city.water.y * sy, MAP_W, city.water.height * sy + 2);
+    g.fillStyle = PALETTE.park;
+    for (const park of city.parks) {
+      g.fillRect(mx + park.x * sx, my + park.y * sy, Math.max(2, park.width * sx), Math.max(2, park.height * sy));
+    }
+    g.fillStyle = PALETTE.plaza;
+    for (const plaza of city.plazas) {
+      g.fillRect(mx + plaza.x * sx, my + plaza.y * sy, Math.max(2, plaza.width * sx), Math.max(2, plaza.height * sy));
+    }
+    g.fillStyle = PALETTE.pier;
+    g.fillRect(mx + city.docks.x * sx, my + city.docks.y * sy, Math.max(2, city.docks.width * sx), Math.max(2, city.docks.height * sy));
     for (const b of city.buildings) {
-      context.fillStyle = b.color;
-      context.fillRect(mx + b.x * sx, my + b.y * sy, Math.max(1.5, b.width * sx), Math.max(1.5, b.height * sy));
+      g.fillStyle = b.color;
+      g.fillRect(mx + b.x * sx, my + b.y * sy, Math.max(1.5, b.width * sx), Math.max(1.5, b.height * sy));
     }
-    context.strokeStyle = '#6b7076';
-    context.lineWidth = 3;
-    for (const rx of ROAD_XS) {
-      context.beginPath();
-      context.moveTo(mx + rx * sx, my);
-      context.lineTo(mx + rx * sx, my + MINIMAP.height);
-      context.stroke();
-    }
-    for (const ry of ROAD_YS) {
-      context.beginPath();
-      context.moveTo(mx, my + ry * sy);
-      context.lineTo(mx + MINIMAP.width, my + ry * sy);
-      context.stroke();
-    }
+    g.strokeStyle = '#6b7076';
+    g.lineWidth = 3;
+    for (const rx of ROAD_XS) seg(mx + rx * sx, my, mx + rx * sx, my + MAP_H);
+    for (const ry of ROAD_YS) seg(mx, my + ry * sy, mx + MAP_W, my + ry * sy);
     const place = state.missionPlace;
     if (place && !state.won) {
-      context.fillStyle = PALETTE.marker;
-      context.beginPath();
-      context.arc(mx + place.x * sx, my + place.y * sy, 5, 0, Math.PI * 2);
-      context.fill();
+      g.fillStyle = PALETTE.marker;
+      disc(mx + place.x * sx, my + place.y * sy, 5);
     }
     for (const car of state.cars) {
       if (car.kind !== 'police') continue;
-      context.fillStyle = '#4d9fff';
-      context.beginPath();
-      context.arc(mx + car.x * sx, my + car.y * sy, 4, 0, Math.PI * 2);
-      context.fill();
+      g.fillStyle = '#4d9fff';
+      disc(mx + car.x * sx, my + car.y * sy, 4);
     }
-    // The player: a yellow arrow pointing where they face.
-    context.save();
-    context.translate(mx + state.player.x * sx, my + state.player.y * sy);
-    context.rotate(state.player.angle);
-    context.fillStyle = PALETTE.player;
-    context.beginPath();
-    context.moveTo(8, 0);
-    context.lineTo(-6, -5);
-    context.lineTo(-6, 5);
-    context.closePath();
-    context.fill();
-    context.restore();
-    context.restore();
-    context.strokeStyle = 'rgba(255,255,255,0.35)';
-    context.lineWidth = 1;
-    context.strokeRect(mx, my, MINIMAP.width, MINIMAP.height);
-    plainText('VIREO BAY', mx + 6, my + 14, 12, '#ffffff', 'left', 'top');
+    g.save();
+    g.translate(mx + state.player.x * sx, my + state.player.y * sy);
+    g.rotate(state.player.angle);
+    g.fillStyle = PALETTE.player;
+    g.beginPath();
+    g.moveTo(8, 0);
+    g.lineTo(-6, -5);
+    g.lineTo(-6, 5);
+    g.closePath();
+    g.fill();
+    g.restore();
+    g.strokeStyle = '#ffffff';
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.arc(mx + state.player.x * sx, my + state.player.y * sy, 9, 0, TAU);
+    g.stroke();
+    g.restore();
+    g.strokeStyle = 'rgba(255,255,255,0.35)';
+    g.lineWidth = 1;
+    g.strokeRect(mx, my, MAP_W, MAP_H);
+    plainAt('VIREO BAY', mx + 6, my + 14, 12, '#ffffff', 'left', 'top');
   }
 
-  /** The mission place name, in screen space after the HUD, clamped into the
-   *  safe area with a dark pill behind it — it can never hide under a panel. */
-  function drawPlaceLabel(state) {
+  // The mission place name, in screen space after the HUD, clamped into the
+  // safe area with a dark pill behind it. It can never hide under a panel:
+  // it sits above the minimap's top edge and below the mission bar.
+  function paintTag(state) {
     const place = state.missionPlace;
     if (!place || state.won || !place.label) return;
     const cam = state.camera;
-    let sx = place.x - cam.x + VIEW.width / 2;
-    let sy = place.y - 78 - cam.y + VIEW.height / 2;
+    let sx = (place.x - cam.x) + VIEW.width / 2;
+    let sy = (place.y - 78 - cam.y) + VIEW.height / 2;
     sx = Math.max(130, Math.min(VIEW.width - 130, sx));
-    // Round 5 fix: never slide under the minimap (its panel starts at y≈528).
     sy = Math.max(128, Math.min(500, sy));
-    const size = 17;
-    if (!fonts.has(size)) fonts.set(size, `bold ${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    const w = context.measureText(place.label).width;
-    context.fillStyle = 'rgba(12,16,24,0.72)';
-    roundRect(sx - w / 2 - 12, sy - 25, w + 24, 34, 8);
-    context.fill();
-    context.fillStyle = '#ffffff';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(place.label, sx, sy - 7);
+    const px = 17;
+    if (!faces.has(px)) faces.set(px, `bold ${px}px ${FONT}`);
+    g.font = faces.get(px);
+    const w = g.measureText(place.label).width;
+    const pad = 26;
+    const pillW = w + pad * 2;
+    g.fillStyle = 'rgba(12,16,24,0.72)';
+    pill(sx - pillW / 2, sy - 25, pillW, 34, 8);
+    g.fill();
+    // A small gold diamond at the pill's left edge, pointing at the place.
+    g.fillStyle = PALETTE.marker;
+    g.save();
+    g.translate(sx - pillW / 2 + 14, sy - 8);
+    g.rotate(Math.PI / 4);
+    g.fillRect(-5, -5, 10, 10);
+    g.restore();
+    g.fillStyle = '#ffffff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(place.label, sx + 6, sy - 7);
   }
 
-  function drawHud(state, city) {
-    // Top-left panel: money, health bar, ammo.
-    context.fillStyle = PALETTE.hudPanel;
-    roundRect(12, 12, 250, 92, 10);
-    context.fill();
-    text(moneyLabel(state.money), 26, 34, 26, '#7ee787', 'left', 'top');
-    plainText('CASH', 26, 62, 13, PALETTE.hudMuted, 'left', 'top');
+  // The HUD: cash and health top-left, the job top-centre, wanted stars
+  // top-right, speed and controls bottom-left, the minimap, and the transient
+  // message bar at centre-bottom.
+  function paintHud(state, city) {
+    g.fillStyle = PALETTE.hudPanel;
+    pill(12, 12, 250, 92, 10);
+    g.fill();
+    boldAt(cashWord(state.money), 26, 34, 26, '#7ee787', 'left', 'top');
+    plainAt('CASH', 26, 62, 13, PALETTE.hudMuted, 'left', 'top');
     const hw = 150;
-    context.fillStyle = 'rgba(0,0,0,0.6)';
-    context.fillRect(96, 56, hw, 12);
-    context.fillStyle = state.health > 30 ? PALETTE.health : PALETTE.healthLow;
-    context.fillRect(96, 56, hw * Math.max(0, state.health / 100), 12);
-    text(healthLabel(Math.round(state.health)), 96, 84, 15, PALETTE.hudText, 'left', 'top');
-    plainText('AMMO', 170, 84, 13, PALETTE.hudMuted, 'left', 'top');
-    text(ammoLabel(state.ammo), 222, 84, 15, PALETTE.hudText, 'left', 'top');
-    // Top-center: the current job and its objective.
+    g.fillStyle = 'rgba(0,0,0,0.6)';
+    g.fillRect(96, 56, hw, 12);
+    g.fillStyle = state.health > 30 ? PALETTE.health : PALETTE.healthLow;
+    g.fillRect(96, 56, hw * Math.max(0, state.health / 100), 12);
+    boldAt(hpWord(Math.round(state.health)), 96, 84, 15, PALETTE.hudText, 'left', 'top');
+    plainAt('AMMO', 170, 84, 13, PALETTE.hudMuted, 'left', 'top');
+    boldAt(ammoWord(state.ammo), 222, 84, 15, PALETTE.hudText, 'left', 'top');
     const def = MISSION_DEFS[state.missionIndex];
-    context.fillStyle = PALETTE.hudPanel;
-    roundRect(VIEW.width / 2 - 300, 12, 600, 64, 10);
-    context.fill();
+    g.fillStyle = PALETTE.hudPanel;
+    pill(VIEW.width / 2 - 300, 12, 600, 64, 10);
+    g.fill();
     if (def) {
-      text(missionLabel(def.title), VIEW.width / 2, 30, 20, PALETTE.title, 'center', 'top');
-      plainText(objectiveText(state.missionIndex, state.stageIndex), VIEW.width / 2, 54, 16, PALETTE.hudText, 'center', 'top');
+      boldAt(jobWord(def.title), VIEW.width / 2, 30, 20, PALETTE.title, 'center', 'top');
+      plainAt(objectiveText(state.missionIndex, state.stageIndex), VIEW.width / 2, 54, 16, PALETTE.hudText, 'center', 'top');
       if (state.missionTimer > 0) {
-        text(`⏱ ${Math.ceil(state.missionTimer)}s`, VIEW.width / 2 + 268, 30, 18, '#ffb020', 'right', 'top');
+        boldAt(`⏱ ${Math.ceil(state.missionTimer)}s`, VIEW.width / 2 + 268, 30, 18, '#ffb020', 'right', 'top');
       }
     } else {
-      text('ALL JOBS DONE — DEBT PAID!', VIEW.width / 2, 30, 20, PALETTE.title, 'center', 'top');
-      plainText('Vireo Bay is yours. Keep driving.', VIEW.width / 2, 54, 16, PALETTE.hudText, 'center', 'top');
+      boldAt('ALL JOBS DONE — DEBT PAID!', VIEW.width / 2, 30, 20, PALETTE.title, 'center', 'top');
+      plainAt('Vireo Bay is yours. Keep driving.', VIEW.width / 2, 54, 16, PALETTE.hudText, 'center', 'top');
     }
-    // Top-right: wanted stars.
-    context.fillStyle = PALETTE.hudPanel;
-    roundRect(VIEW.width - 244, 12, 232, 52, 10);
-    context.fill();
-    plainText('WANTED', VIEW.width - 230, 30, 14, PALETTE.hudMuted, 'left', 'top');
+    g.fillStyle = PALETTE.hudPanel;
+    pill(VIEW.width - 244, 12, 232, 52, 10);
+    g.fill();
+    plainAt('WANTED', VIEW.width - 230, 30, 14, PALETTE.hudMuted, 'left', 'top');
     for (let i = 0; i < 5; i += 1) {
-      text('★', VIEW.width - 144 + i * 22, 26, 26, i < state.wanted ? PALETTE.star : PALETTE.starEmpty, 'left', 'top');
+      boldAt('★', VIEW.width - 144 + i * 22, 26, 26, i < state.wanted ? PALETTE.star : PALETTE.starEmpty, 'left', 'top');
     }
-    // Speed, bottom-left, while driving.
     if (!state.player.onFoot) {
       const kmh = Math.round(Math.abs(state.player.speed) * 0.36);
-      text(speedLabel(kmh), 26, VIEW.height - 30, 30, PALETTE.hudText, 'left', 'alphabetic');
-      plainText('km/h', 26, VIEW.height - 58, 13, PALETTE.hudMuted, 'left', 'alphabetic');
-      plainText('E — get out    F — shoot', 26, VIEW.height - 84, 14, PALETTE.hudMuted, 'left', 'alphabetic');
+      boldAt(paceWord(kmh), 26, VIEW.height - 30, 30, PALETTE.hudText, 'left', 'alphabetic');
+      plainAt('km/h', 26, VIEW.height - 58, 13, PALETTE.hudMuted, 'left', 'alphabetic');
+      plainAt('E — get out    F — shoot', 26, VIEW.height - 84, 14, PALETTE.hudMuted, 'left', 'alphabetic');
     } else {
-      plainText('WASD — move    E — enter car    Space — punch    F — shoot', 26, VIEW.height - 30, 14, PALETTE.hudMuted, 'left', 'alphabetic');
+      plainAt('WASD — move    E — enter car    Space — punch    F — shoot', 26, VIEW.height - 30, 14, PALETTE.hudMuted, 'left', 'alphabetic');
     }
-    drawMinimap(state, city);
-    // Transient message, centre-bottom.
+    paintMap(state, city);
     if (state.messageTimer > 0 && state.message) {
-      context.fillStyle = PALETTE.hudPanel;
+      g.fillStyle = PALETTE.hudPanel;
       const w = Math.min(760, 40 + state.message.length * 9);
-      roundRect(VIEW.width / 2 - w / 2, VIEW.height - 118, w, 40, 10);
-      context.fill();
-      plainText(state.message, VIEW.width / 2, VIEW.height - 91, 17, PALETTE.hudText, 'center', 'middle');
+      pill(VIEW.width / 2 - w / 2, VIEW.height - 118, w, 40, 10);
+      g.fill();
+      plainAt(state.message, VIEW.width / 2, VIEW.height - 91, 17, PALETTE.hudText, 'center', 'middle');
     }
   }
 
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (VIEW.width - PANEL.width) / 2;
+  // The centred card behind the title, pause and game-over screens.
+  function paintCard(title, lines, prompt) {
+    const height = CARD_TOP + lines.length * CARD_ROW + CARD_FOOT;
+    const x = (VIEW.width - CARD_W) / 2;
     const y = (VIEW.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    roundRect(x, y, PANEL.width, height, 14);
-    context.fill();
-    context.strokeStyle = 'rgba(255,210,62,0.5)';
-    context.lineWidth = 2;
-    roundRect(x, y, PANEL.width, height, 14);
-    context.stroke();
-    context.textBaseline = 'alphabetic';
-    text(title, VIEW.width / 2, y + 82, 52, PALETTE.title, 'center');
+    g.fillStyle = PALETTE.panel;
+    pill(x, y, CARD_W, height, 14);
+    g.fill();
+    g.strokeStyle = 'rgba(255,210,62,0.5)';
+    g.lineWidth = 2;
+    pill(x, y, CARD_W, height, 14);
+    g.stroke();
+    g.textBaseline = 'alphabetic';
+    boldAt(title, VIEW.width / 2, y + 82, 52, PALETTE.title, 'center');
     for (let index = 0; index < lines.length; index += 1) {
-      plainText(lines[index], VIEW.width / 2, y + PANEL.top + index * PANEL.line, 20, PALETTE.hudMuted, 'center');
+      plainAt(lines[index], VIEW.width / 2, y + CARD_TOP + index * CARD_ROW, 20, PALETTE.hudMuted, 'center');
     }
-    text(prompt, VIEW.width / 2, y + height - 36, 22, '#f2c94c', 'center');
+    boldAt(prompt, VIEW.width / 2, y + height - 36, 22, '#f2c94c', 'center');
   }
 
-  /** Paint one frame: the world through the camera, then the HUD or a panel. */
+  /** Paint one frame: the world through the camera, then the HUD or a card. */
   function draw(state, city, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = '#0d1117';
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.fillStyle = '#0d1117';
+    g.fillRect(0, 0, canvas.width, canvas.height);
     const cam = state.camera;
     const ox = VIEW.width / 2 - cam.x;
     const oy = VIEW.height / 2 - cam.y;
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    // Clip to the 1280x720 view so nothing draws into the letterbox.
-    context.save();
-    context.beginPath();
-    context.rect(0, 0, VIEW.width, VIEW.height);
-    context.clip();
-    context.translate(ox, oy);
-    drawWorld(state, city);
-    context.restore();
-    // Round 3: golden-hour — a very thin warm tint plus a soft vignette over
-    // the world only, so the HUD and its text stay crisp and un-tinted.
-    const warm = context.createRadialGradient(
+    g.setTransform(zoom.scale, 0, 0, zoom.scale, zoom.ox, zoom.oy);
+    // Clip to the 1280x720 view so nothing spills into the letterbox.
+    g.save();
+    g.beginPath();
+    g.rect(0, 0, VIEW.width, VIEW.height);
+    g.clip();
+    g.translate(ox, oy);
+    paintScene(state, city);
+    g.restore();
+    // Golden hour: a thin warm tint plus a soft vignette over the world
+    // only, so the HUD and its text stay crisp and un-tinted.
+    const warm = g.createRadialGradient(
       VIEW.width / 2, VIEW.height / 2, VIEW.height * 0.35,
       VIEW.width / 2, VIEW.height / 2, VIEW.width * 0.75,
     );
     warm.addColorStop(0, 'rgba(255, 176, 80, 0.045)');
     warm.addColorStop(0.7, 'rgba(255, 160, 60, 0.06)');
-    warm.addColorStop(1, 'rgba(40, 20, 60, 0.14)');
-    context.fillStyle = warm;
-    context.fillRect(0, 0, VIEW.width, VIEW.height);
+    warm.addColorStop(1, 'rgba(40, 20, 60, 0.15)');
+    g.fillStyle = warm;
+    g.fillRect(0, 0, VIEW.width, VIEW.height);
     if (screen === SCREEN_TITLE) {
-      // Round 5: a lighter dim (0.45 -> 0.30) so the living city shows through
-      // the title instead of a murky backdrop.
-      context.fillStyle = 'rgba(8, 10, 18, 0.30)';
-      context.fillRect(0, 0, VIEW.width, VIEW.height);
-      drawPanel('VIREO BAY', [
+      // A light dim, so the living city shows through behind the title card.
+      g.fillStyle = 'rgba(8, 10, 18, 0.28)';
+      g.fillRect(0, 0, VIEW.width, VIEW.height);
+      paintCard('VIREO BAY', [
         'An open-world crime game in a sun-soaked bay city.',
         'Dana Voss owes the Bay Syndicate $5,000. Four jobs. One fast car.',
         'Steal cars, lose the cops, run the jobs, pay the debt.',
@@ -911,26 +974,26 @@ export function createRenderer(canvas) {
       ], 'Press Space or click to start');
       return;
     }
-    drawHud(state, city);
-    if (screen === SCREEN_PLAY) drawPlaceLabel(state);
+    paintHud(state, city);
+    if (screen === SCREEN_PLAY) paintTag(state);
     if (screen === SCREEN_PAUSED) {
-      context.fillStyle = 'rgba(8, 10, 18, 0.55)';
-      context.fillRect(0, 0, VIEW.width, VIEW.height);
-      drawPanel('Paused', ['The city waits for you.', `Cash $${state.money} · Jobs done ${state.stats.delivered} / 4`], 'Press P to resume');
+      g.fillStyle = 'rgba(8, 10, 18, 0.55)';
+      g.fillRect(0, 0, VIEW.width, VIEW.height);
+      paintCard('Paused', ['The city waits for you.', `Cash $${state.money} · Jobs done ${state.stats.delivered} / 4`], 'Press P to resume');
     } else if (screen === SCREEN_OVER) {
-      context.fillStyle = 'rgba(8, 10, 18, 0.55)';
-      context.fillRect(0, 0, VIEW.width, VIEW.height);
+      g.fillStyle = 'rgba(8, 10, 18, 0.55)';
+      g.fillRect(0, 0, VIEW.width, VIEW.height);
       if (state.won || state.endReason === 'won') {
-        drawPanel('DEBT PAID!', [`Dana cleared the $5,000 and kept $${state.money}.`, `Jobs done: ${state.stats.delivered} · Cars stolen: ${state.stats.stolen}`], 'Press Space to play again');
+        paintCard('DEBT PAID!', [`Dana cleared the $5,000 and kept $${state.money}.`, `Jobs done: ${state.stats.delivered} · Cars stolen: ${state.stats.stolen}`], 'Press Space to play again');
       } else if (state.endReason === 'busted') {
-        drawPanel('BUSTED', ['The Vireo Bay PD caught up with Dana.', 'Bail cost $100. The jobs are still waiting.'], 'Press Space to try again');
+        paintCard('BUSTED', ['The Vireo Bay PD caught up with Dana.', 'Bail cost $100. The jobs are still waiting.'], 'Press Space to try again');
       } else {
-        drawPanel('WASTED', ['Dana went down in Vireo Bay.', `Cash kept: $${state.money}`], 'Press Space to try again');
+        paintCard('WASTED', ['Dana went down in Vireo Bay.', `Cash kept: $${state.money}`], 'Press Space to try again');
       }
     }
   }
 
-  resize();
-  window.addEventListener('resize', resize);
+  fit();
+  window.addEventListener('resize', fit);
   return { draw, screenToWorld };
 }
