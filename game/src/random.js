@@ -2,6 +2,7 @@
 // city, traffic and missions, which is what makes the screenshot scenes repeatable.
 // Round 3: no RNG change — the new roof and street detail draws from this same stream.
 // Round 6: re-written live under the recording; no RNG change.
+// Round 7: re-written live under the recording; no RNG change.
 
 export function createRandom(seed) {
   let a = seed | 0;

@@ -10,6 +10,8 @@ Round 3 polish: golden-hour lighting, rooftop detail (AC units, skylights, garde
 
 Round 6 polish: paneled roofs with parapet rims, a brighter title screen, larger outlined pedestrians, a screen-space place label, and more life on the ground — flowers, benches, bollards, foam and sun glints, white road edges and manhole covers.
 
+Round 7 polish: the renderer is re-authored live under the recording — same paneled roofs, brighter title and readable labels, no gameplay change.
+
 ## Run it
 
 ```sh

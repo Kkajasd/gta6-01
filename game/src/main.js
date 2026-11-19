@@ -3,6 +3,7 @@
 // there. The game moves between four screens: title, play, paused and game over.
 // Round 3: no boot change — the polish is visual only.
 // Round 6: re-written live under the recording; no boot change.
+// Round 7: re-written live under the recording; no boot change.
 //
 // ?seed=N fixes the city and traffic. ?shot=chase|street|mission|start (with &seed=N)
 // stages that scene instead of running the loop, paints it twice and sets

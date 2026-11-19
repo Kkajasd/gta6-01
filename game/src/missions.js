@@ -5,6 +5,7 @@
 // without changing the rules.
 // Round 3: no mission change — the polish is visual only.
 // Round 6: re-written live under the recording; no mission change.
+// Round 7: re-written live under the recording; no mission change.
 
 import { MISSIONS } from './config.js';
 

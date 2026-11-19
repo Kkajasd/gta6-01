@@ -3,6 +3,7 @@
 // the same seed always builds the same city. Collision is a list of solid rectangles;
 // anything that needs "is this point on a road?" asks the helpers here.
 // Round 6: re-written live under the recording; no generation change.
+// Round 7: re-written live under the recording; no generation change.
 
 import { PALETTE, ROAD, WORLD } from './config.js';
 import { pick, range } from './random.js';

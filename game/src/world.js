@@ -5,6 +5,7 @@
 // about screens. Nothing here allocates after createWorld returns, except the small
 // particle bursts, which are pooled by reuse.
 // Round 6: re-written live under the recording; no rules change.
+// Round 7: re-written live under the recording; no rules change.
 
 import {
   CAR, COMBAT, PEDS, PLAYER, POLICE, ROAD, TRAFFIC, VIEW, WANTED, WORLD,
