@@ -370,18 +370,21 @@ export function createRenderer(canvas) {
       if (b.roof) {
         for (const d of b.roof) {
           if (d.kind === 'ac') {
+            // Round 5: furniture drawn ~35% larger so it reads at a glance.
+            const s = d.s * 1.35;
             context.fillStyle = '#c8ccd0';
-            context.fillRect(d.x, d.y, d.s, d.s);
+            context.fillRect(d.x, d.y, s, s);
             context.fillStyle = '#8a9096';
-            context.fillRect(d.x + 2, d.y + 2, d.s - 4, 4);
+            context.fillRect(d.x + 2, d.y + 2, s - 4, 4);
           } else if (d.kind === 'vent') {
+            const s = d.s * 1.35;
             context.fillStyle = '#5a6068';
             context.beginPath();
-            context.arc(d.x, d.y, d.s, 0, Math.PI * 2);
+            context.arc(d.x, d.y, s, 0, Math.PI * 2);
             context.fill();
             context.fillStyle = '#9aa0a6';
             context.beginPath();
-            context.arc(d.x, d.y, d.s * 0.5, 0, Math.PI * 2);
+            context.arc(d.x, d.y, s * 0.5, 0, Math.PI * 2);
             context.fill();
           } else if (d.kind === 'sky') {
             context.fillStyle = 'rgba(170, 220, 245, 0.85)';
@@ -416,9 +419,20 @@ export function createRenderer(canvas) {
           }
         }
       }
-      context.fillStyle = 'rgba(255,255,255,0.16)';
-      context.fillRect(b.x + 10, b.y + 22, b.width - 20, 6);
-      context.fillRect(b.x + 10, b.y + 44, b.width - 20, 6);
+      // Round 5: the roof reads as a roof, not a flat slab — a two-tone inset
+      // panel, repeating panel bands across the whole roof, and vertical seams,
+      // all derived from the building's own rect (no RNG, fully deterministic).
+      // Roof furniture is drawn a little larger so it reads at a glance.
+      context.fillStyle = 'rgba(0,0,0,0.07)';
+      context.fillRect(b.x + 16, b.y + 16, b.width - 32, b.height - 32);
+      context.fillStyle = 'rgba(255,255,255,0.10)';
+      for (let by = b.y + 22; by < b.y + b.height - 12; by += 44) {
+        context.fillRect(b.x + 12, by, b.width - 24, 5);
+      }
+      context.fillStyle = 'rgba(0,0,0,0.08)';
+      for (let bx = b.x + 48; bx < b.x + b.width - 12; bx += 48) {
+        context.fillRect(bx, b.y + 12, 2, b.height - 24);
+      }
     }
   }
 
@@ -531,10 +545,16 @@ export function createRenderer(canvas) {
     context.beginPath();
     context.ellipse(x + 2, y + 5, radius * 0.9, radius * 0.45, 0, 0, Math.PI * 2);
     context.fill();
+    // Round 5: a dark outline ring so walkers pop off grass and road alike.
     context.fillStyle = color;
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
     context.fill();
+    context.strokeStyle = 'rgba(0,0,0,0.4)';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.stroke();
     context.fillStyle = 'rgba(0,0,0,0.25)';
     context.beginPath();
     context.arc(x - 3, y - 3, radius * 0.45, 0, Math.PI * 2);
@@ -573,7 +593,8 @@ export function createRenderer(canvas) {
       context.lineWidth = 3;
       context.strokeRect(-13, -13, 26, 26);
       context.restore();
-      plainText(place.label || '', place.x, place.y - 78 + bounce, 17, '#ffffff', 'center', 'middle');
+      // Round 5: the place name is drawn in screen space after the HUD (see
+      // drawPlaceLabel) so it can never hide under a HUD panel.
     }
     // Pickups.
     for (const pk of state.pickups) {
@@ -611,7 +632,8 @@ export function createRenderer(canvas) {
         context.ellipse(ped.x, ped.y, 14, 7, ped.angle, 0, Math.PI * 2);
         context.fill();
       } else {
-        drawPerson(ped.x, ped.y, ped.angle, ped.color, 10, false);
+        // Round 5: walkers a little larger (10 -> 12) so the city reads as lived in.
+        drawPerson(ped.x, ped.y, ped.angle, ped.color, 12, false);
       }
     }
     // Enemies, with a health bar.
@@ -746,6 +768,30 @@ export function createRenderer(canvas) {
     plainText('VIREO BAY', mx + 6, my + 14, 12, '#ffffff', 'left', 'top');
   }
 
+  /** The mission place name, in screen space after the HUD, clamped into the
+   *  safe area with a dark pill behind it — it can never hide under a panel. */
+  function drawPlaceLabel(state) {
+    const place = state.missionPlace;
+    if (!place || state.won || !place.label) return;
+    const cam = state.camera;
+    let sx = place.x - cam.x + VIEW.width / 2;
+    let sy = place.y - 78 - cam.y + VIEW.height / 2;
+    sx = Math.max(130, Math.min(VIEW.width - 130, sx));
+    // Round 5 fix: never slide under the minimap (its panel starts at y≈528).
+    sy = Math.max(128, Math.min(500, sy));
+    const size = 17;
+    if (!fonts.has(size)) fonts.set(size, `bold ${size}px ${FONT}`);
+    context.font = fonts.get(size);
+    const w = context.measureText(place.label).width;
+    context.fillStyle = 'rgba(12,16,24,0.72)';
+    roundRect(sx - w / 2 - 12, sy - 25, w + 24, 34, 8);
+    context.fill();
+    context.fillStyle = '#ffffff';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(place.label, sx, sy - 7);
+  }
+
   function drawHud(state, city) {
     // Top-left panel: money, health bar, ammo.
     context.fillStyle = PALETTE.hudPanel;
@@ -852,7 +898,9 @@ export function createRenderer(canvas) {
     context.fillStyle = warm;
     context.fillRect(0, 0, VIEW.width, VIEW.height);
     if (screen === SCREEN_TITLE) {
-      context.fillStyle = 'rgba(8, 10, 18, 0.45)';
+      // Round 5: a lighter dim (0.45 -> 0.30) so the living city shows through
+      // the title instead of a murky backdrop.
+      context.fillStyle = 'rgba(8, 10, 18, 0.30)';
       context.fillRect(0, 0, VIEW.width, VIEW.height);
       drawPanel('VIREO BAY', [
         'An open-world crime game in a sun-soaked bay city.',
@@ -864,6 +912,7 @@ export function createRenderer(canvas) {
       return;
     }
     drawHud(state, city);
+    if (screen === SCREEN_PLAY) drawPlaceLabel(state);
     if (screen === SCREEN_PAUSED) {
       context.fillStyle = 'rgba(8, 10, 18, 0.55)';
       context.fillRect(0, 0, VIEW.width, VIEW.height);
