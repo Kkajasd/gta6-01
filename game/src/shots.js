@@ -1,110 +1,137 @@
-// Vireo Bay — the four dossier shots. Each one stages the same seeded world
-// forward with a road-following autopilot, so the same shot always plays the
-// same way. The game page boots with ?shot=<name>&seed=1 to take a shot.
-import { AVENUES, STREETS, HIDEOUT } from './config.js';
-import { SCREEN_TITLE, SCREEN_PLAY } from './render.js';
-import { startJob } from './missions.js';
+// Shot staging for Vireo Bay: put the world into a fixed, photogenic pose
+// for each of the four screenshots. Every pose is deterministic — the same
+// seed and the same number of fixed steps always land the same frame.
+// main.js calls stageShot once, runs a fixed number of steps, then freezes.
+import { CAR, JOBS } from './config.js';
+import { roadX, roadY } from './city.js';
+import { dist } from './random.js';
 
-const STEP = 1 / 60;
+export const SHOT_NAMES = ['1-chase', '2-street', '3-mission', '4-start'];
 
-function nearestAvenueIndex(x) {
-  let best = 0;
-  for (let i = 1; i < AVENUES.length; i += 1) {
-    if (Math.abs(x - AVENUES[i]) < Math.abs(x - AVENUES[best])) best = i;
-  }
-  return best;
-}
-
-function nearestStreetIndex(y) {
-  let best = 0;
-  for (let j = 1; j < STREETS.length; j += 1) {
-    if (Math.abs(y - STREETS[j]) < Math.abs(y - STREETS[best])) best = j;
-  }
-  return best;
-}
-
-/** Road waypoints to a target: along the current avenue, then along a street. */
-function routeTo(world, target) {
-  const p = world.player;
-  const ai = nearestAvenueIndex(p.x);
-  const sj = nearestStreetIndex(target.y);
-  const queue = [{ x: AVENUES[ai], y: STREETS[sj] }];
-  if (Math.abs(target.x - AVENUES[ai]) > 40) queue.push({ x: target.x, y: STREETS[sj] });
-  else queue.push({ x: target.x, y: target.y });
-  return queue;
-}
-
-/** Drive toward the head of the queue; refill with a new route when done. */
-function autopilot(world, queue, fallbackTarget) {
-  const p = world.player;
-  if (queue.length === 0) {
-    queue.push(...routeTo(world, fallbackTarget));
-  }
-  const head = queue[0];
-  if (Math.hypot(head.x - p.x, head.y - p.y) < 90) queue.shift();
-  const target = queue[0] || fallbackTarget;
-  const want = Math.atan2(target.y - p.y, target.x - p.x);
-  let diff = want - p.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return {
-    drive: { steer: Math.max(-1, Math.min(1, diff * 1.8)), gas: 1, brake: 0 },
-    walk: { x: 0, y: 0, moving: false },
-    enter: false, punch: false, shoot: false,
+// A pink player car: the hero car of the chase and mission shots.
+function heroCar(world, x, y, angle, speed) {
+  const car = {
+    x, y, angle, speed, color: '#ff5a9e', parked: false, vertical: false,
+    turnAt: 0, targetSpeed: 0, isPlayer: true, isPolice: false,
   };
-}
-
-/** Put Dana in her own car (the magenta one) and start driving. */
-function getInCar(world) {
+  world.cars.push(car);
   const p = world.player;
-  const own = world.cars.find((c) => c.color === '#ff2e88');
-  if (own) {
-    p.car = own;
-    own.kind = 'player';
-    p.onFoot = false;
-    p.angle = own.angle;
-  }
+  p.car = car;
+  p.onFoot = false;
+  p.x = x; p.y = y; p.angle = angle; p.speed = speed;
+  return car;
 }
 
-function stepFor(world, seconds, queue, fallbackTarget) {
-  const steps = Math.round(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) {
-    world.step(STEP, autopilot(world, queue, fallbackTarget), false);
-  }
+// A police car placed right behind a point, already in pursuit.
+function copBehind(world, x, y, angle, gap) {
+  const bx = x - Math.cos(angle) * gap;
+  const by = y - Math.sin(angle) * gap;
+  const cop = {
+    x: bx, y: by, angle, speed: 380, health: 100,
+    color: '#2244aa', isPolice: true, isPlayer: false, parked: false, vertical: false,
+  };
+  world.police.push(cop);
+  return cop;
 }
 
-export function stageShot(name, world) {
-  if (name === 'start') {
-    // The title screen: Dana cruises downtown on her own for five seconds.
-    for (let i = 0; i < 300; i += 1) {
-      world.step(STEP, { drive: { steer: 0, gas: 0, brake: 0 }, walk: { x: 0, y: 0, moving: false }, enter: false, punch: false, shoot: false }, true);
+export function stageShot(world, name) {
+  const p = world.player;
+  const places = world.city.places;
+  // Clear the default traffic near the shot so the frame stays clean.
+  world.cars.length = 0;
+  world.peds.length = 0;
+  world.police.length = 0;
+  world.parts.length = 0;
+  world.bullets.length = 0;
+  world.screen = 'play';
+  world.over = false;
+  world.won = false;
+  p.health = 100;
+  p.ammo = 48;
+  p.cash = 1250;
+
+  if (name === '1-chase') {
+    // The Getaway, mid-chase: pink hero car, two PD cars right behind,
+    // four wanted stars, the job banner up top.
+    world.job.index = 2;
+    world.job.phase = 'go';
+    world.job.target = { x: places.hideout.x, y: places.hideout.y, label: 'Hideout' };
+    p.wanted = 4;
+    p.heat = 8;
+    const x = roadX(2) + 120;
+    const y = roadY(2);
+    heroCar(world, x, y, 0, 320);
+    copBehind(world, x, y, 0, 200);
+    copBehind(world, x, y + 26, 0, 280);
+    // A couple of bystanders ahead for depth.
+    world.cars.push({
+      x: x + 260, y: y - 14, angle: 0, speed: 130, color: '#f2c14e',
+      parked: false, vertical: false, turnAt: 0, targetSpeed: 0, isPlayer: false, isPolice: false,
+    });
+    world.camera.x = x + 60;
+    world.camera.y = y;
+    return;
+  }
+
+  if (name === '2-street') {
+    // The beach district: palms, umbrellas and sand on one side, the
+    // marina's boats and pier on the other, neon signs down the block.
+    world.job.index = 1;
+    world.job.phase = 'go';
+    world.job.target = { x: places.marina.x, y: places.marina.y, label: 'Marina' };
+    p.wanted = 0;
+    p.heat = 0;
+    // The hero car cruises the beach road; beachgoers stroll the sand.
+    heroCar(world, roadX(1) - 120, roadY(1), 0, 130);
+    const sandX = places.beach.x;
+    const sandY = places.beach.y;
+    for (let i = 0; i < 3; i++) {
+      world.peds.push({
+        x: sandX + 40 + i * 36, y: sandY - 30 + i * 44, angle: Math.PI / 2,
+        speed: 30, color: ['#ff8a80', '#80d8ff', '#ffd54f'][i],
+        flee: 0, tx: sandX, ty: sandY, wait: 2,
+      });
     }
-    world.shotCam = { x: world.player.x, y: world.player.y };
-    return { screen: SCREEN_TITLE, best: world.best };
+    // A few cars cruising the beach road and the marina road.
+    world.cars.push({
+      x: roadX(1), y: roadY(0) + 60, angle: Math.PI / 2, speed: 120, color: '#4a90e8',
+      parked: false, vertical: true, turnAt: 0, targetSpeed: 0, isPlayer: false, isPolice: false,
+    });
+    world.cars.push({
+      x: roadX(2) + 200, y: roadY(1), angle: 0, speed: 110, color: '#e84a4a',
+      parked: false, vertical: false, turnAt: 0, targetSpeed: 0, isPlayer: false, isPolice: false,
+    });
+    world.camera.x = roadX(1) + 112;
+    world.camera.y = 360;
+    return;
   }
 
-  getInCar(world);
-  if (name === 'street') {
-    // A straight cruise down Neon Ave: three seconds of traffic, palms and neon.
-    const queue = routeTo(world, { x: 800, y: 2400 });
-    stepFor(world, 3, queue, { x: 800, y: 2400 });
-    return { screen: SCREEN_PLAY, best: world.best };
+  if (name === '3-mission') {
+    // The Getaway's endgame: the Hideout ring, gold marker, police
+    // closing in on the hero car.
+    world.job.index = 2;
+    world.job.phase = 'go';
+    world.job.target = { x: places.hideout.x, y: places.hideout.y, label: 'Hideout' };
+    p.wanted = 3;
+    p.heat = 8;
+    const hx = places.hideout.x;
+    const hy = places.hideout.y;
+    heroCar(world, hx - 190, hy + 90, -Math.PI / 2, 260);
+    copBehind(world, hx - 190, hy + 90, -Math.PI / 2, 140);
+    copBehind(world, hx - 160, hy + 130, -Math.PI / 2, 220);
+    world.camera.x = hx - 60;
+    world.camera.y = hy + 40;
+    return;
   }
-  if (name === 'chase') {
-    // Job 2, The Package Run, with three stars of heat and three cop cars on
-    // Dana's tail: eighteen seconds of getaway.
-    startJob(world, 1);
-    world.wanted = 3;
-    const queue = routeTo(world, { x: HIDEOUT.x, y: HIDEOUT.y });
-    stepFor(world, 18, queue, { x: HIDEOUT.x, y: HIDEOUT.y });
-    return { screen: SCREEN_PLAY, best: world.best };
+
+  if (name === '4-start') {
+    // The title screen over a golden-hour downtown view.
+    world.screen = 'title';
+    world.camera.x = roadX(3);
+    world.camera.y = roadY(1);
+    return;
   }
-  if (name === 'mission') {
-    // Job 3, The Getaway: lose the cops, then reach the Hideout. Twenty seconds.
-    startJob(world, 2);
-    const queue = routeTo(world, { x: HIDEOUT.x, y: HIDEOUT.y });
-    stepFor(world, 20, queue, { x: HIDEOUT.x, y: HIDEOUT.y });
-    return { screen: SCREEN_PLAY, best: world.best };
-  }
-  return { screen: SCREEN_PLAY, best: world.best };
 }
+
+// How many fixed steps the harness runs after staging before freezing.
+export const SHOT_STEPS = 45;

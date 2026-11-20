@@ -1,83 +1,133 @@
-// Vireo Bay — every tuning number and colour in one place.
-// The world is a fixed 3840x2560 coastal city; the renderer scales the camera
-// view to the window, so no rule below depends on the screen size.
-
-/** The simulation's fixed step, in seconds: 60 updates a second. */
+// Tuning and constants for Vireo Bay: the city grid, the golden-hour sun,
+// the districts, the jobs and the controls. Every other module reads from
+// here so the whole game can be retuned in one place.
+export const TILE = 64;
+export const ROAD_W = 64;
+export const BLOCK_W = 320;
+export const BLOCK_H = 240;
+export const COLS = 6;
+export const ROWS = 5;
+export const WORLD_W = COLS * (BLOCK_W + ROAD_W) + ROAD_W;
+export const WORLD_H = ROWS * (BLOCK_H + ROAD_W) + ROAD_W;
 export const STEP = 1 / 60;
 
-/** World extents in world units. */
-export const WORLD = { width: 3840, height: 2560 };
-
-/** Road grid: avenues run north-south, streets east-west, every 320 units. */
-export const ROAD_SPACING = 320;
-export const ROAD_WIDTH = 96;
-export const AVENUES = [160, 480, 800, 1120, 1440, 1760, 2080, 2400, 2720, 3040, 3360, 3680];
-export const STREETS = [160, 480, 800, 1120, 1440, 1760, 2080, 2400];
-
-export const AVENUE_NAMES = [
-  'Ocean Dr', 'Palmetto Ave', 'Neon Ave', 'Coral Way', 'Bayfront Ave', 'Harbor Blvd',
-  'Sunset Strip', 'Magnolia Ave', 'Royal Palm Ave', 'Coconut Row', 'Marina Blvd', 'Tradewind Ave',
-];
-export const STREET_NAMES = [
-  '1st St', 'Seabreeze Ln', 'Flamingo St', 'Calle Ocho', 'Sunrise Blvd',
-  'Pelican Way', 'Heron St', 'Dockside Rd',
-];
-
-/** Golden-hour palette: warm low sun, long shadows, a sun-soaked bay city. */
-export const PALETTE = {
-  skyTop: '#ff9a3d',
-  skyMid: '#ff7e5f',
-  skyLow: '#feb47b',
-  sunCore: '#fff3c4',
-  ground: '#e8c98f',
-  grass: '#7fb069',
-  grassDark: '#5d9b4a',
-  sand: '#f2d8a0',
-  sandWet: '#e0bd7d',
-  ocean: '#1d6f8e',
-  oceanDeep: '#14506b',
-  oceanFoam: '#eaf6f2',
-  road: '#3d414e',
-  roadEdge: '#2c2f3a',
-  sidewalk: '#b9b3a4',
-  crosswalk: '#e8e4d8',
-  laneDash: '#ffd75e',
-  buildingRoof: ['#c96f4a', '#8e6fb8', '#4f9d7a', '#b84a62', '#d9a441', '#5b7fa6'],
-  buildingWall: ['#a85438', '#6f5394', '#3d7d60', '#96404f', '#b3822f', '#46648a'],
-  windowLit: '#ffd98a',
-  windowDark: '#2e3a4d',
-  neon: ['#ff2e88', '#22e6ff', '#ffe14d', '#7dff5e', '#ff7a2e'],
-  carPlayer: '#ff2e88',
-  carPolice: '#1d2733',
-  health: '#58d68d',
-  cash: '#7dff5e',
-  wanted: '#ffd75e',
-};
-
-/** Where the sun sits for the golden hour: low, warm, from the south-west. */
+// Where the sun sits for the golden hour: low, warm, from the south-west.
 export const SUN = { x: 0.72, y: 0.18, angle: Math.PI * 0.78, length: 34 };
+
+// The golden-hour palette: warm sky, deep asphalt, sun-bleached blocks.
+export const PALETTE = {
+  skyTop: '#ff9a5c',
+  skyMid: '#ffb37a',
+  skyLow: '#ffd9a0',
+  road: '#3a3230',
+  roadEdge: '#54443c',
+  sidewalk: '#8f8578',
+  curb: '#6e675c',
+  sand: '#e8c98a',
+  water: '#2e7f9e',
+  waterDeep: '#1f5f7d',
+  grass: '#7fae5a',
+  grassDark: '#6a9a4a',
+  plaza: '#b7a98f',
+  wood: '#8a6a45',
+  woodDark: '#6f5436',
+};
 
 export const BEST_KEY = 'vireo-bay-best';
 export const WANTED_MAX = 5;
-export const AMMO_START = 48;
-export const HEALTH_MAX = 100;
+export const DEBT = 5000;
 
-export const PLAYER = {
-  walkSpeed: 235,
-  radius: 13,
-  carAccel: 920,
-  carMax: 640,
-  carReverseMax: 220,
-  carBrake: 1500,
-  carTurn: 3.1,
-  carLength: 52,
-  carWidth: 26,
+// The four jobs, in story order. Each pays cash and raises the heat.
+export const JOBS = [
+  {
+    id: 0,
+    name: 'First Fare',
+    short: 'Job 1 — First Fare',
+    brief: 'Pick up the fare at Sol Plaza',
+    reward: 250,
+    wanted: 1,
+  },
+  {
+    id: 1,
+    name: 'The Package Run',
+    short: 'Job 2 — The Package Run',
+    brief: 'Grab the package, lose the tail',
+    reward: 600,
+    wanted: 2,
+  },
+  {
+    id: 2,
+    name: 'The Getaway',
+    short: 'Job 3 — The Getaway',
+    brief: 'Lose the cops, then reach the Hideout',
+    reward: 1200,
+    wanted: 3,
+  },
+  {
+    id: 3,
+    name: 'Payoff',
+    short: 'Job 4 — Payoff',
+    brief: 'Clear the rival crew at the Harbor Docks',
+    reward: 3500,
+    wanted: 4,
+  },
+];
+
+// Named places the HUD and the missions point at.
+export const PLACES = {
+  hideout: { name: 'Hideout', x: 0, y: 0 },
+  plaza: { name: 'Sol Plaza', x: 0, y: 0 },
+  docks: { name: 'Harbor Docks', x: 0, y: 0 },
+  marina: { name: 'Marina', x: 0, y: 0 },
+  beach: { name: 'Palmetto Beach', x: 0, y: 0 },
 };
 
-export const TRAFFIC = { speed: 165, count: 16, colors: ['#e74c3c', '#3498db', '#f1c40f', '#ecf0f1', '#9b59b6', '#1abc9c', '#e67e22', '#95a5a6'] };
-export const PEDS = { count: 26, speed: 55 };
-export const POLICE = { speed: 585, ramDamage: 9, sight: 700 };
+// Street names for the HUD pill, one per road line.
+export const STREETS_X = ['Bayfront Ave', 'Coral St', 'Neon Blvd', 'Sunset Dr', 'Harbor Way'];
+export const STREETS_Y = ['Ocean Row', 'Palm Court', 'Vice St', 'Tropic Ln', 'Pier Rd', 'Dune Ave'];
 
-export const HIDEOUT = { x: 3520, y: 2080, label: 'Hideout', radius: 150 };
-export const SYNDICATE = { x: 1760, y: 800, label: 'Syndicate Tower' };
-export const BEACH_DROP = { x: 420, y: 2080, label: 'Beach drop-off' };
+// Neon signs painted on building faces.
+export const NEON_SIGNS = ['TACOS', 'MOTEL', 'DINER', 'GYM', 'HOTEL', 'BAR'];
+
+// Player tuning.
+export const PLAYER = {
+  walkSpeed: 170,
+  runSpeed: 250,
+  radius: 13,
+  punchRange: 34,
+  punchArc: 1.1,
+  shootCooldown: 0.22,
+  startAmmo: 48,
+  maxHealth: 100,
+};
+
+// Car tuning.
+export const CAR = {
+  accel: 420,
+  brake: 620,
+  reverseAccel: 220,
+  maxSpeed: 520,
+  maxReverse: 140,
+  turnRate: 2.6,
+  grip: 3.2,
+  length: 46,
+  width: 22,
+};
+
+// Traffic tuning.
+export const TRAFFIC = {
+  count: 14,
+  speedMin: 90,
+  speedMax: 150,
+  pedCount: 22,
+};
+
+// Police tuning.
+export const POLICE = {
+  accel: 470,
+  maxSpeed: 560,
+  turnRate: 3.0,
+  ramDamage: 8,
+  bustRange: 26,
+  spawnDistance: 420,
+};

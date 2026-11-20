@@ -1,41 +1,44 @@
-// Vireo Bay — the entrypoint. Copies the game and its screenshots into /output
-// and writes the dossier the judge reads. Node 22, standard library only.
+// Vireo Bay's hand-in program (Node 22, standard library only): it copies
+// game/ and screenshots/ from beside this file to /output and writes
+// /output/dossier.json, the summary the judge reads, with the vendored
+// make.fun library. Outside the grader, MAKEFUN_OUTPUT_DIR stands in for
+// /output:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 //
-// The grader runs this twice and requires byte-identical output, so the copy
-// is a plain recursive copy and the dossier is built from the copied files.
-// /output itself is never removed: in the grader it is a bind-mount, and
-// removing it fails the run. Only its contents are cleared.
+// The grader mounts /output as a bind-mount, so this program never removes
+// the directory itself: it only clears the contents inside it, then writes
+// the fresh entry. Both runs must write the same bytes, so nothing here
+// depends on the clock or the environment.
+
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const CAPS = {
+const here = fileURLToPath(new URL('.', import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+
+// Clear only the contents of the output directory, never the directory.
+mkdirSync(out, { recursive: true });
+for (const entry of readdirSync(out)) {
+  rmSync(join(out, entry), { recursive: true, force: true });
+}
+
+cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
+mkdirSync(join(out, 'screenshots'), { recursive: true });
+if (existsSync(join(here, 'screenshots'))) {
+  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+}
+
+// The scorer's own caps (reference/gate.json): only text_max_bytes shapes
+// the bytes; the others refuse an entry the scorer would refuse (more than
+// 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB
+// of game files, in all, or a path under game/ over 1000 bytes).
+const dossier = buildDossier(out, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
   game_path_max_bytes: 1000,
-};
-
-const ROOT = dirname(fileURLToPath(import.meta.url));
-const OUT = process.env.OUTPUT_DIR || '/output';
-
-function clearContents(dir) {
-  for (const entry of readdirSync(dir)) {
-    rmSync(join(dir, entry), { recursive: true, force: true });
-  }
-}
-
-mkdirSync(OUT, { recursive: true });
-clearContents(OUT);
-if (!existsSync(join(ROOT, 'game', 'index.html'))) {
-  throw new Error('Vireo Bay: game/index.html is missing, cannot build a dossier');
-}
-if (!existsSync(join(ROOT, 'screenshots'))) {
-  throw new Error('Vireo Bay: screenshots/ is missing, cannot build a dossier');
-}
-cpSync(join(ROOT, 'game'), join(OUT, 'game'), { recursive: true });
-cpSync(join(ROOT, 'screenshots'), join(OUT, 'screenshots'), { recursive: true });
-writeFileSync(join(OUT, 'dossier.json'), buildDossier(OUT, CAPS));
-console.log(`Vireo Bay: dossier written to ${join(OUT, 'dossier.json')}`);
+});
+writeFileSync(join(out, 'dossier.json'), dossier);
+console.error('vireo-bay: wrote dossier.json (' + dossier.length + ' bytes) to ' + out);

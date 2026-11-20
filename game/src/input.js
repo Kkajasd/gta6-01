@@ -1,10 +1,14 @@
-// Vireo Bay — keyboard and mouse input. WASD / arrows drive and walk, E enters
-// or steals a car, Space punches (and confirms), F shoots, P pauses, M mutes.
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_ENTER = 4;
-export const ACTION_PUNCH = 8;
-export const ACTION_SHOOT = 16;
+// Keyboard and mouse input for Vireo Bay: one shared state object the
+// simulation reads every step, plus edge-triggered actions (enter, punch,
+// shoot) that fire once per press.
+export function createInput() {
+  return {
+    up: false, down: false, left: false, right: false,
+    enter: false, punch: false, shoot: false, handbrake: false,
+    pause: false, any: false,
+    mouseX: 0, mouseY: 0, clicked: false,
+  };
+}
 
 const KEYMAP = {
   KeyW: 'up', ArrowUp: 'up',
@@ -14,65 +18,64 @@ const KEYMAP = {
   KeyE: 'enter',
   Space: 'punch',
   KeyF: 'shoot',
+  ShiftLeft: 'handbrake', ShiftRight: 'handbrake',
   KeyP: 'pause',
-  Escape: 'pause',
-  KeyM: 'mute',
-  Enter: 'confirm',
 };
 
-export function createInput(canvas) {
-  const held = new Set();
-  const pressed = new Set();
-  let muted = false;
-
-  function onKeyDown(event) {
-    const name = KEYMAP[event.code];
+// Bind keyboard + mouse on the given window/canvas; returns an unbind fn.
+export function bindInput(input, target, canvas) {
+  function down(e) {
+    const name = KEYMAP[e.code];
     if (!name) return;
-    event.preventDefault();
-    if (!held.has(name)) pressed.add(name);
-    held.add(name);
+    if (name === 'pause') { input.pause = true; }
+    else if (name === 'enter' || name === 'punch' || name === 'shoot') {
+      if (!input[name]) input[name] = true;
+    } else {
+      input[name] = true;
+    }
+    input.any = true;
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   }
-  function onKeyUp(event) {
-    const name = KEYMAP[event.code];
-    if (name) held.delete(name);
+  function up(e) {
+    const name = KEYMAP[e.code];
+    if (!name || name === 'pause') return;
+    if (name === 'enter' || name === 'punch' || name === 'shoot') return;
+    input[name] = false;
   }
-  function onMouseDown(event) {
-    event.preventDefault();
-    pressed.add('confirm');
+  function mouseMove(e) {
+    const rect = canvas.getBoundingClientRect();
+    input.mouseX = e.clientX - rect.left;
+    input.mouseY = e.clientY - rect.top;
   }
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  canvas.addEventListener('mousedown', onMouseDown);
-
-  return {
-    get muted() {
-      return muted;
-    },
-    /** Steering -1..1 and throttle 0..1 for driving. */
-    drive() {
-      const steer = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
-      const gas = held.has('up') ? 1 : 0;
-      const brake = held.has('down') ? 1 : 0;
-      return { steer, gas, brake };
-    },
-    /** A unit-ish walk vector for moving on foot. */
-    walk() {
-      const x = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
-      const y = (held.has('down') ? 1 : 0) - (held.has('up') ? 1 : 0);
-      const len = Math.hypot(x, y) || 1;
-      return { x: x / len, y: y / len, moving: x !== 0 || y !== 0 };
-    },
-    /** Edge-triggered actions since the last call; also toggles mute. */
-    takeActions() {
-      let mask = 0;
-      if (pressed.has('confirm') || pressed.has('punch')) mask |= ACTION_CONFIRM;
-      if (pressed.has('pause')) mask |= ACTION_PAUSE;
-      if (pressed.has('enter')) mask |= ACTION_ENTER;
-      if (pressed.has('punch')) mask |= ACTION_PUNCH;
-      if (pressed.has('shoot')) mask |= ACTION_SHOOT;
-      if (pressed.has('mute')) muted = !muted;
-      pressed.clear();
-      return mask;
-    },
+  function mouseDown(e) {
+    mouseMove(e);
+    input.clicked = true;
+    input.any = true;
+  }
+  // Losing focus must not leave a key stuck down.
+  function blur() {
+    input.up = input.down = input.left = input.right = false;
+    input.handbrake = false;
+  }
+  target.addEventListener('keydown', down);
+  target.addEventListener('keyup', up);
+  target.addEventListener('blur', blur);
+  canvas.addEventListener('mousemove', mouseMove);
+  canvas.addEventListener('mousedown', mouseDown);
+  return function unbind() {
+    target.removeEventListener('keydown', down);
+    target.removeEventListener('keyup', up);
+    target.removeEventListener('blur', blur);
+    canvas.removeEventListener('mousemove', mouseMove);
+    canvas.removeEventListener('mousedown', mouseDown);
   };
+}
+
+// Clear the edge-triggered actions after each simulation step.
+export function clearEdges(input) {
+  input.enter = false;
+  input.punch = false;
+  input.shoot = false;
+  input.pause = false;
+  input.clicked = false;
 }

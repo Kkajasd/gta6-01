@@ -1,230 +1,243 @@
-// Vireo Bay — the city itself: a coastal grid of avenues and streets, five
-// districts, and everything the renderer draws. Generated once from a seed, so
-// the same seed always builds the same city.
-import { AVENUES, STREETS, ROAD_WIDTH, WORLD, PALETTE } from './config.js';
+// The city of Vireo Bay: a road grid of blocks, each block a district with
+// its own buildings and props. Built once from a seed so the same seed always
+// draws the same city. No other module lays out the map.
+import {
+  BLOCK_W, BLOCK_H, ROAD_W, COLS, ROWS, WORLD_W, WORLD_H,
+  STREETS_X, STREETS_Y, NEON_SIGNS, PALETTE,
+} from './config.js';
+import { mulberry32, pick, intBetween, floatBetween, shuffled } from './random.js';
 
-const BLOCK = 224;
-const HALF_ROAD = ROAD_WIDTH / 2;
-
-export function districtAt(x, y) {
-  if (x < 160) return 'ocean';
-  if (y > 2440) return 'marina';
-  if (x < 640) return 'beach';
-  if (y > 2240) return 'port';
-  if (x >= 1280 && x < 2560 && y >= 320 && y < 1280) return 'downtown';
-  if (x >= 2880) return 'suburbs';
-  return 'midtown';
+// Centre of vertical road c (0..COLS) and horizontal road r (0..ROWS).
+export function roadX(c) {
+  return ROAD_W / 2 + c * (BLOCK_W + ROAD_W);
+}
+export function roadY(r) {
+  return ROAD_W / 2 + r * (BLOCK_H + ROAD_W);
 }
 
-export function isWater(x, y) {
-  return x < 160 || y > 2440;
-}
-
-export function isRoad(x, y) {
-  for (const ax of AVENUES) if (Math.abs(x - ax) < HALF_ROAD) return true;
-  for (const sy of STREETS) if (Math.abs(y - sy) < HALF_ROAD) return true;
+// Is a point on a road (with a small margin onto the sidewalk)?
+export function onRoad(x, y) {
+  const half = ROAD_W / 2 + 4;
+  for (let c = 0; c <= COLS; c++) {
+    if (Math.abs(x - roadX(c)) < half) return true;
+  }
+  for (let r = 0; r <= ROWS; r++) {
+    if (Math.abs(y - roadY(r)) < half) return true;
+  }
   return false;
 }
 
-/** The nearest road centreline to a point, and how far away it is. */
-export function nearestRoad(x, y) {
-  let best = null;
-  for (let i = 0; i < AVENUES.length; i += 1) {
-    const d = Math.abs(x - AVENUES[i]);
-    if (best === null || d < best.dist) best = { kind: 'v', index: i, center: AVENUES[i], dist: d };
+// The nearest point on the road grid to (x, y).
+export function snapToRoad(x, y) {
+  let bestX = roadX(0);
+  let bestD = Infinity;
+  for (let c = 0; c <= COLS; c++) {
+    const d = Math.abs(x - roadX(c));
+    if (d < bestD) { bestD = d; bestX = roadX(c); }
   }
-  for (let j = 0; j < STREETS.length; j += 1) {
-    const d = Math.abs(y - STREETS[j]);
-    if (d < best.dist) best = { kind: 'h', index: j, center: STREETS[j], dist: d };
+  let bestY = roadY(0);
+  bestD = Infinity;
+  for (let r = 0; r <= ROWS; r++) {
+    const d = Math.abs(y - roadY(r));
+    if (d < bestD) { bestD = d; bestY = roadY(r); }
   }
-  return best;
+  return { x: bestX, y: bestY };
 }
 
-export function streetName(x, y) {
-  const road = nearestRoad(x, y);
-  return road;
+// Which block contains a point, or null on a road.
+export function blockAt(x, y) {
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      const x0 = roadX(c) + ROAD_W / 2;
+      const x1 = roadX(c + 1) - ROAD_W / 2;
+      const y0 = roadY(r) + ROAD_W / 2;
+      const y1 = roadY(r + 1) - ROAD_W / 2;
+      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return { c, r, x0, y0, x1, y1 };
+    }
+  }
+  return null;
 }
 
-function blockBounds(i, j) {
-  return {
-    x0: AVENUES[i] + HALF_ROAD,
-    y0: STREETS[j] + HALF_ROAD,
-    x1: AVENUES[i + 1] - HALF_ROAD,
-    y1: STREETS[j + 1] - HALF_ROAD,
-  };
+// Street name under a point, for the HUD pill.
+export function streetAt(x, y) {
+  let cx = 0;
+  let cd = Infinity;
+  for (let c = 0; c <= COLS; c++) {
+    const d = Math.abs(x - roadX(c));
+    if (d < cd) { cd = d; cx = c; }
+  }
+  let ry = 0;
+  let rd = Infinity;
+  for (let r = 0; r <= ROWS; r++) {
+    const d = Math.abs(y - roadY(r));
+    if (d < rd) { rd = d; ry = r; }
+  }
+  if (cd < rd) return STREETS_X[Math.min(cx, STREETS_X.length - 1)];
+  return STREETS_Y[Math.min(ry, STREETS_Y.length - 1)];
 }
 
-const NEON_SIGNS = ['VIREO', 'NEON', 'BAY HOTEL', '24H TACOS', 'CASINO', 'PALMS', 'SUNSET', 'MARINA'];
+// District kinds, fixed by position so the named places never move.
+function districtAt(c, r) {
+  if (c === 0 && r <= 1) return 'beach';
+  if (c === 1 && r === 0) return 'marina';
+  if (c >= 4 && r >= 3) return 'port';
+  if (c === 2 && r === 1) return 'plaza';
+  if (c === 1 && r === 2) return 'park';
+  if (c >= 2 && c <= 3 && r <= 1) return 'downtown';
+  if (r >= 3) return 'docks';
+  return 'shops';
+}
 
-/** Build the whole city from the seed: buildings, parks, palms, boats, docks. */
-export function createCity(random) {
+const ROOF_COLORS = ['#b5673f', '#7d8aa0', '#a08a6d', '#8f6f7d', '#5f7d6a', '#c08a4a', '#6a6a8f'];
+const WALL_COLORS = ['#c98a5a', '#8a9ab0', '#b09a7a', '#9a7a8a', '#7a9a7a', '#d0a060', '#7a7aa0'];
+
+export function buildCity(seed) {
+  const rnd = mulberry32(seed);
+  const blocks = [];
   const buildings = [];
-  const parks = [];
-  const palms = [];
-  const trees = [];
-  const umbrellas = [];
-  const boats = [];
-  const docks = [];
-  const containers = [];
+  const props = [];
+  const places = {
+    hideout: { name: 'Hideout', x: 0, y: 0 },
+    plaza: { name: 'Sol Plaza', x: 0, y: 0 },
+    docks: { name: 'Harbor Docks', x: 0, y: 0 },
+    marina: { name: 'Marina', x: 0, y: 0 },
+    beach: { name: 'Palmetto Beach', x: 0, y: 0 },
+  };
 
-  // Four park blocks, picked by seed, spread across the map.
-  const parkKeys = new Set();
-  while (parkKeys.size < 4) {
-    parkKeys.add(`${random.int(2, 9)}:${random.int(1, 5)}`);
-  }
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      const x0 = roadX(c) + ROAD_W / 2;
+      const y0 = roadY(r) + ROAD_W / 2;
+      const x1 = roadX(c + 1) - ROAD_W / 2;
+      const y1 = roadY(r + 1) - ROAD_W / 2;
+      const kind = districtAt(c, r);
+      const block = { c, r, x0, y0, x1, y1, kind };
+      blocks.push(block);
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
 
-  for (let i = 0; i < AVENUES.length - 1; i += 1) {
-    for (let j = 0; j < STREETS.length - 1; j += 1) {
-      const b = blockBounds(i, j);
-      const cx = (b.x0 + b.x1) / 2;
-      const cy = (b.y0 + b.y1) / 2;
-      const district = districtAt(cx, cy);
-      if (district === 'ocean' || district === 'marina') continue;
-
-      if (parkKeys.has(`${i}:${j}`)) {
-        parks.push({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
-        for (let t = 0; t < 7; t += 1) {
-          trees.push({ x: random.range(b.x0 + 20, b.x1 - 20), y: random.range(b.y0 + 20, b.y1 - 20), r: random.range(14, 24) });
+      if (kind === 'beach') {
+        // Sand with a strip of water on the west edge, palms and umbrellas.
+        props.push({ type: 'water', x: x0 - 6, y: y0, w: 44, h: y1 - y0 });
+        const n = intBetween(rnd, 4, 6);
+        for (let i = 0; i < n; i++) {
+          const px = floatBetween(rnd, x0 + 40, x1 - 30);
+          const py = floatBetween(rnd, y0 + 30, y1 - 30);
+          props.push({ type: 'palm', x: px, y: py, s: floatBetween(rnd, 0.9, 1.3) });
         }
+        for (let i = 0; i < 3; i++) {
+          props.push({
+            type: 'umbrella',
+            x: floatBetween(rnd, x0 + 60, x1 - 50),
+            y: floatBetween(rnd, y0 + 40, y1 - 40),
+            color: pick(rnd, ['#ff5a7a', '#ffd23f', '#3fa7ff', '#ff8a3d']),
+          });
+        }
+        if (c === 0 && r === 0) { places.beach.x = cx; places.beach.y = cy; }
         continue;
       }
-
-      if (district === 'beach') {
-        // Boardwalk shops along the east edge of the beach, palms and umbrellas west.
+      if (kind === 'marina') {
+        // Water basin with moored boats and a wooden pier.
+        props.push({ type: 'water', x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+        props.push({ type: 'pier', x: x0 + 30, y: y0 + 20, w: 14, h: y1 - y0 - 40 });
+        const n = intBetween(rnd, 3, 5);
+        for (let i = 0; i < n; i++) {
+          props.push({
+            type: 'boat',
+            x: floatBetween(rnd, x0 + 70, x1 - 50),
+            y: floatBetween(rnd, y0 + 30, y1 - 30),
+            angle: floatBetween(rnd, -0.4, 0.4),
+            color: pick(rnd, ['#f2f2f2', '#ffd23f', '#ff5a7a', '#7ad0ff']),
+          });
+        }
+        if (c === 1 && r === 0) { places.marina.x = cx; places.marina.y = cy; }
+        continue;
+      }
+      if (kind === 'port' || kind === 'docks') {
+        // Container yard: stacked boxes, cranes and a warehouse.
+        const n = intBetween(rnd, 5, 8);
+        for (let i = 0; i < n; i++) {
+          props.push({
+            type: 'container',
+            x: floatBetween(rnd, x0 + 20, x1 - 60),
+            y: floatBetween(rnd, y0 + 20, y1 - 30),
+            w: intBetween(rnd, 40, 70),
+            h: 22,
+            color: pick(rnd, ['#d05a3a', '#3a7ad0', '#e0a030', '#4a9a5a', '#8a5ad0']),
+          });
+        }
         buildings.push({
-          x: b.x1 - 58, y: b.y0 + 18, w: 46, h: 60, hgt: 1,
-          roof: random.int(0, 5), sign: random.chance(0.6) ? random.pick(['TACOS', 'SURF', 'BAR']) : null,
-          kind: 'shop',
+          x: x0 + 30, y: y0 + 30, w: x1 - x0 - 60, h: 70,
+          roof: '#7a6a5a', wall: '#8a7a6a', panels: 4, ac: 2,
+          sign: null, helipad: false, district: kind,
         });
-        for (let p = 0; p < 3; p += 1) {
-          palms.push({ x: random.range(b.x0 + 24, b.x0 + 120), y: random.range(b.y0 + 24, b.y1 - 24) });
+        if (kind === 'docks' && c === 4 && r === 4) { places.docks.x = cx; places.docks.y = cy; }
+        continue;
+      }
+      if (kind === 'plaza') {
+        // Open plaza with a fountain and benches.
+        props.push({ type: 'fountain', x: cx, y: cy, r: 34 });
+        for (let i = 0; i < 4; i++) {
+          props.push({ type: 'bench', x: cx + (i % 2 === 0 ? -70 : 70), y: cy + (i < 2 ? -60 : 60) });
         }
-        for (let u = 0; u < 2; u += 1) {
-          umbrellas.push({ x: random.range(b.x0 + 30, b.x0 + 150), y: random.range(b.y0 + 30, b.y1 - 30), color: random.pick(PALETTE.neon) });
+        for (let i = 0; i < 3; i++) {
+          props.push({ type: 'palm', x: floatBetween(rnd, x0 + 30, x1 - 30), y: floatBetween(rnd, y0 + 30, y1 - 30), s: 1 });
+        }
+        places.plaza.x = cx; places.plaza.y = cy;
+        continue;
+      }
+      if (kind === 'park') {
+        // Grass, pond, trees and a footpath.
+        props.push({ type: 'pond', x: cx, y: cy, r: 42 });
+        const n = intBetween(rnd, 5, 8);
+        for (let i = 0; i < n; i++) {
+          props.push({ type: 'tree', x: floatBetween(rnd, x0 + 25, x1 - 25), y: floatBetween(rnd, y0 + 25, y1 - 25), s: floatBetween(rnd, 0.8, 1.4) });
         }
         continue;
       }
-
-      if (district === 'port') {
-        for (let c = 0; c < 4; c += 1) {
-          containers.push({
-            x: random.range(b.x0 + 10, b.x1 - 70), y: random.range(b.y0 + 10, b.y1 - 30),
-            w: random.range(48, 64), h: 22, color: random.pick(['#c0392b', '#2980b9', '#27ae60', '#f39c12']),
-          });
-        }
-        continue;
-      }
-
-      if (district === 'downtown') {
-        const tower = {
-          x: b.x0 + 26, y: b.y0 + 26, w: 172, h: 172, hgt: random.int(2, 3),
-          roof: random.int(0, 5), sign: random.chance(0.55) ? random.pick(NEON_SIGNS) : null,
-          kind: 'tower',
-        };
-        buildings.push(tower);
-        continue;
-      }
-
-      if (district === 'suburbs') {
-        for (let h = 0; h < 2; h += 1) {
-          buildings.push({
-            x: b.x0 + 20 + h * 104, y: b.y0 + 30 + random.range(-8, 60), w: 78, h: 64, hgt: 1,
-            roof: random.int(0, 5), sign: null, kind: 'house',
-          });
-        }
-        for (let t = 0; t < 3; t += 1) {
-          trees.push({ x: random.range(b.x0 + 16, b.x1 - 16), y: random.range(b.y0 + 16, b.y1 - 16), r: random.range(12, 20) });
-        }
-        continue;
-      }
-
-      // Midtown: a shop and an office block.
+      // downtown / shops / residential: one or two buildings per block.
+      const tall = kind === 'downtown';
+      const bw = (x1 - x0) * (tall ? 0.72 : 0.58);
+      const bh = (y1 - y0) * (tall ? 0.74 : 0.6);
+      const bx = x0 + (x1 - x0 - bw) / 2 + floatBetween(rnd, -14, 14);
+      const by = y0 + (y1 - y0 - bh) / 2 + floatBetween(rnd, -10, 10);
+      const sign = rnd() < (tall ? 0.55 : 0.3) ? pick(rnd, NEON_SIGNS) : null;
       buildings.push({
-        x: b.x0 + 16, y: b.y0 + 20, w: 96, h: 74, hgt: 1,
-        roof: random.int(0, 5), sign: random.chance(0.4) ? random.pick(['DINER', 'MOTEL', 'GYM']) : null,
-        kind: 'shop',
+        x: bx, y: by, w: bw, h: bh,
+        roof: pick(rnd, ROOF_COLORS), wall: pick(rnd, WALL_COLORS),
+        panels: tall ? 6 : 4, ac: intBetween(rnd, 1, 4),
+        sign, helipad: tall && c === 3 && r === 0, district: kind,
       });
-      buildings.push({
-        x: b.x0 + 118, y: b.y0 + 96, w: 88, h: 104, hgt: 2,
-        roof: random.int(0, 5), sign: null, kind: 'office',
-      });
-      for (let t = 0; t < 2; t += 1) {
-        trees.push({ x: random.range(b.x0 + 16, b.x1 - 16), y: random.range(b.y0 + 16, b.y1 - 16), r: random.range(11, 17) });
+      if (rnd() < 0.5) {
+        buildings.push({
+          x: x0 + 18, y: y1 - 62, w: 90, h: 44,
+          roof: pick(rnd, ROOF_COLORS), wall: pick(rnd, WALL_COLORS),
+          panels: 3, ac: 1, sign: null, helipad: false, district: kind,
+        });
+      }
+      const nt = intBetween(rnd, 1, 3);
+      for (let i = 0; i < nt; i++) {
+        props.push({ type: 'tree', x: floatBetween(rnd, x0 + 20, x1 - 20), y: floatBetween(rnd, y0 + 20, y1 - 20), s: floatBetween(rnd, 0.8, 1.2) });
       }
     }
   }
 
-  // Marina docks reaching into the water, with boats moored beside them.
-  for (let d = 0; d < 4; d += 1) {
-    const x = 560 + d * 620;
-    docks.push({ x, y: 2400, w: 26, h: 130 });
-    for (let s = 0; s < 2; s += 1) {
-      boats.push({ x: x + (s === 0 ? -34 : 34), y: 2470 + random.range(0, 60), angle: random.range(-0.2, 0.2), color: random.pick(['#ecf0f1', '#e74c3c', '#3498db']) });
+  // The Hideout sits in the far south-east block, a low safehouse.
+  const hb = blocks.find((b) => b.c === 5 && b.r === 2);
+  places.hideout.x = (hb.x0 + hb.x1) / 2;
+  places.hideout.y = (hb.y0 + hb.y1) / 2;
+  props.push({ type: 'hideout', x: places.hideout.x, y: places.hideout.y });
+
+  // Street lamps along every road.
+  for (let c = 0; c <= COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      props.push({ type: 'lamp', x: roadX(c) + ROAD_W / 2 - 6, y: roadY(r) + (BLOCK_H + ROAD_W) / 2 });
     }
   }
-  // Ocean boats further out, drifting.
-  for (let s = 0; s < 5; s += 1) {
-    boats.push({ x: random.range(30, 130), y: random.range(200, 2300), angle: random.range(-0.4, 0.4), color: random.pick(['#ecf0f1', '#f1c40f', '#1abc9c']) });
-  }
-  // Palms lining the beach road.
-  for (let y = 220; y < 2400; y += 180) {
-    palms.push({ x: 210 + random.range(-14, 14), y });
-  }
 
-  return { buildings, parks, palms, trees, umbrellas, boats, docks, containers };
-}
-
-/** True when a circle of radius r at (x, y) touches a building or water. */
-export function blockedAt(city, x, y, r) {
-  if (isWater(x, y)) return true;
-  for (const b of city.buildings) {
-    if (x > b.x - r && x < b.x + b.w + r && y > b.y - r && y < b.y + b.h + r) return true;
-  }
-  return false;
-}
-
-/** Push a circle out of buildings and water; returns the corrected position. */
-export function resolveCircle(city, x, y, r) {
-  if (x < 160 + r) x = 160 + r;
-  if (y > 2440 - r) y = 2440 - r;
-  if (x > WORLD.width - r) x = WORLD.width - r;
-  if (y > WORLD.height - r) y = WORLD.height - r;
-  if (x < r) x = r;
-  if (y < r) y = r;
-  for (const b of city.buildings) {
-    const cx = Math.max(b.x, Math.min(x, b.x + b.w));
-    const cy = Math.max(b.y, Math.min(y, b.y + b.h));
-    const dx = x - cx;
-    const dy = y - cy;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < r * r) {
-      if (d2 < 0.001) {
-        // Dead centre: push out along the smallest penetration axis.
-        const left = x - (b.x - r);
-        const right = (b.x + b.w + r) - x;
-        const top = y - (b.y - r);
-        const bottom = (b.y + b.h + r) - y;
-        const m = Math.min(left, right, top, bottom);
-        if (m === left) x = b.x - r;
-        else if (m === right) x = b.x + b.w + r;
-        else if (m === top) y = b.y - r;
-        else y = b.y + b.h + r;
-      } else {
-        const d = Math.sqrt(d2);
-        x = cx + (dx / d) * r;
-        y = cy + (dy / d) * r;
-      }
-    }
-  }
-  return { x, y };
-}
-
-/** A random point on a road (used for traffic and pedestrian spawns). */
-export function randomRoadPoint(random) {
-  if (random.chance(0.5)) {
-    const ax = random.pick(AVENUES);
-    return { x: ax + random.range(-24, 24), y: random.range(160, 2400) };
-  }
-  const sy = random.pick(STREETS);
-  return { x: random.range(160, 3680), y: sy + random.range(-24, 24) };
+  return {
+    blocks, buildings, props, places,
+    w: WORLD_W, h: WORLD_H,
+    palette: PALETTE,
+  };
 }
