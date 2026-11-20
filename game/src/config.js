@@ -55,7 +55,7 @@ export const PALETTE = {
 };
 
 /** Where the sun sits for the golden hour: low, warm, from the south-west. */
-export const SUN = { x: 0.72, y: 0.18, angle: Math.PI * 0.78, length: 26 };
+export const SUN = { x: 0.72, y: 0.18, angle: Math.PI * 0.78, length: 34 };
 
 export const BEST_KEY = 'vireo-bay-best';
 export const WANTED_MAX = 5;

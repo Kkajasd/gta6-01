@@ -638,7 +638,7 @@ function drawHUD(ctx, world, width, height) {
   // Bottom-left: speed and the current street.
   const street = streetLabel(world);
   ctx.fillStyle = 'rgba(10, 14, 22, 0.62)';
-  roundRect(ctx, 16, height - 66, 250, 50, 10);
+  roundRect(ctx, 16, height - 66, 320, 50, 10);
   ctx.fill();
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 22px system-ui, sans-serif';
@@ -646,7 +646,7 @@ function drawHUD(ctx, world, width, height) {
   ctx.fillText(`${Math.round(p.speed * 0.36)} km/h`, 30, height - 40);
   ctx.font = '13px system-ui, sans-serif';
   ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-  ctx.fillText(street, 130, height - 40);
+  ctx.fillText(street, 150, height - 40);
   // Bottom-center: the objective line.
   if (world.objective && m.phase === 'active') {
     ctx.font = 'bold 15px system-ui, sans-serif';

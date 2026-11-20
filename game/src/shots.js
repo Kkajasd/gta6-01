@@ -91,7 +91,9 @@ export function stageShot(name, world) {
     return { screen: SCREEN_PLAY, best: world.best };
   }
   if (name === 'chase') {
-    // Three stars of heat and three cop cars on Dana's tail: eighteen seconds.
+    // Job 2, The Package Run, with three stars of heat and three cop cars on
+    // Dana's tail: eighteen seconds of getaway.
+    startJob(world, 1);
     world.wanted = 3;
     const queue = routeTo(world, { x: HIDEOUT.x, y: HIDEOUT.y });
     stepFor(world, 18, queue, { x: HIDEOUT.x, y: HIDEOUT.y });
