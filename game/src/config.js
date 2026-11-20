@@ -1,125 +1,83 @@
-// Every tuning number and colour for "Vireo City" in one place. The camera shows a
-// 1280x720 window of a much larger city; the renderer scales the window to the browser,
-// so no rule below depends on the screen size.
-// Round 6: re-written live under the recording; no tuning change.
-// Round 7: re-written live under the recording; no tuning change.
+// Vireo Bay — every tuning number and colour in one place.
+// The world is a fixed 3840x2560 coastal city; the renderer scales the camera
+// view to the window, so no rule below depends on the screen size.
 
-export const VIEW = { width: 1280, height: 720 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+/** The simulation's fixed step, in seconds: 60 updates a second. */
 export const STEP = 1 / 60;
 
-/** The whole city, in world units. Roads run on a 480-unit grid inside it. */
-export const WORLD = { width: 3840, height: 2880 };
+/** World extents in world units. */
+export const WORLD = { width: 3840, height: 2560 };
 
-export const ROAD = { spacing: 480, width: 116, first: 240 };
+/** Road grid: avenues run north-south, streets east-west, every 320 units. */
+export const ROAD_SPACING = 320;
+export const ROAD_WIDTH = 96;
+export const AVENUES = [160, 480, 800, 1120, 1440, 1760, 2080, 2400, 2720, 3040, 3360, 3680];
+export const STREETS = [160, 480, 800, 1120, 1440, 1760, 2080, 2400];
+
+export const AVENUE_NAMES = [
+  'Ocean Dr', 'Palmetto Ave', 'Neon Ave', 'Coral Way', 'Bayfront Ave', 'Harbor Blvd',
+  'Sunset Strip', 'Magnolia Ave', 'Royal Palm Ave', 'Coconut Row', 'Marina Blvd', 'Tradewind Ave',
+];
+export const STREET_NAMES = [
+  '1st St', 'Seabreeze Ln', 'Flamingo St', 'Calle Ocho', 'Sunrise Blvd',
+  'Pelican Way', 'Heron St', 'Dockside Rd',
+];
+
+/** Golden-hour palette: warm low sun, long shadows, a sun-soaked bay city. */
+export const PALETTE = {
+  skyTop: '#ff9a3d',
+  skyMid: '#ff7e5f',
+  skyLow: '#feb47b',
+  sunCore: '#fff3c4',
+  ground: '#e8c98f',
+  grass: '#7fb069',
+  grassDark: '#5d9b4a',
+  sand: '#f2d8a0',
+  sandWet: '#e0bd7d',
+  ocean: '#1d6f8e',
+  oceanDeep: '#14506b',
+  oceanFoam: '#eaf6f2',
+  road: '#3d414e',
+  roadEdge: '#2c2f3a',
+  sidewalk: '#b9b3a4',
+  crosswalk: '#e8e4d8',
+  laneDash: '#ffd75e',
+  buildingRoof: ['#c96f4a', '#8e6fb8', '#4f9d7a', '#b84a62', '#d9a441', '#5b7fa6'],
+  buildingWall: ['#a85438', '#6f5394', '#3d7d60', '#96404f', '#b3822f', '#46648a'],
+  windowLit: '#ffd98a',
+  windowDark: '#2e3a4d',
+  neon: ['#ff2e88', '#22e6ff', '#ffe14d', '#7dff5e', '#ff7a2e'],
+  carPlayer: '#ff2e88',
+  carPolice: '#1d2733',
+  health: '#58d68d',
+  cash: '#7dff5e',
+  wanted: '#ffd75e',
+};
+
+/** Where the sun sits for the golden hour: low, warm, from the south-west. */
+export const SUN = { x: 0.72, y: 0.18, angle: Math.PI * 0.78, length: 26 };
+
+export const BEST_KEY = 'vireo-bay-best';
+export const WANTED_MAX = 5;
+export const AMMO_START = 48;
+export const HEALTH_MAX = 100;
 
 export const PLAYER = {
+  walkSpeed: 235,
   radius: 13,
-  walkSpeed: 210,
-  runSpeed: 300,
-  health: 100,
-  punchRange: 34,
-  punchDamage: 25,
-  punchCooldown: 0.38,
-  shootCooldown: 0.22,
-  invulnerable: 1.0,
+  carAccel: 920,
+  carMax: 640,
+  carReverseMax: 220,
+  carBrake: 1500,
+  carTurn: 3.1,
+  carLength: 52,
+  carWidth: 26,
 };
 
-export const CAR = {
-  length: 54,
-  width: 26,
-  accel: 420,
-  brake: 620,
-  reverseAccel: 240,
-  maxSpeed: 560,
-  maxReverse: 180,
-  turnRate: 2.9,
-  grip: 3.2,
-};
+export const TRAFFIC = { speed: 165, count: 16, colors: ['#e74c3c', '#3498db', '#f1c40f', '#ecf0f1', '#9b59b6', '#1abc9c', '#e67e22', '#95a5a6'] };
+export const PEDS = { count: 26, speed: 55 };
+export const POLICE = { speed: 585, ramDamage: 9, sight: 700 };
 
-export const TRAFFIC = {
-  count: 24,
-  cruise: 150,
-  cruiseJitter: 45,
-  spawnGap: 90,
-};
-
-export const PEDS = { count: 40, speed: 55, speedJitter: 25, fleeSpeed: 150 };
-
-export const POLICE = {
-  maxCars: 4,
-  cruise: 330,
-  ramDamage: 12,
-  bustRange: 30,
-  spawnDistance: 700,
-};
-
-export const WANTED = {
-  max: 5,
-  decayDelay: 9,
-  decayEvery: 6,
-  steal: 1,
-  hitPed: 1,
-  hitCar: 1,
-  shoot: 1,
-};
-
-export const COMBAT = {
-  enemyHealth: 60,
-  enemyRange: 260,
-  enemyShootCooldown: 1.1,
-  bulletSpeed: 620,
-  bulletDamage: 12,
-  bulletLife: 0.9,
-  startAmmo: 48,
-  ammoPickup: 24,
-};
-
-export const MISSIONS = { reward: [300, 450, 700, 1200] };
-
-export const PALETTE = {
-  grass: '#7fae5a',
-  park: '#6da34e',
-  sand: '#e3cd8f',
-  water: '#2f7fb8',
-  waterDeep: '#1f5f92',
-  road: '#3a3f46',
-  roadEdge: '#565d66',
-  lane: '#d8c95a',
-  sidewalk: '#9aa0a3',
-  buildingRoof: ['#b0563f', '#4f7fa8', '#8a6fb0', '#c08a3e', '#5d8a6a', '#a85a72'],
-  buildingEdge: '#2c2f36',
-  plaza: '#b9b3a4',
-  pier: '#8a6b4a',
-  // Round 3: street trees, palms and roof gardens use two greens each so a
-  // canopy reads as one tree instead of a flat disc.
-  tree: '#3f7a2e',
-  treeLight: '#5d9c42',
-  palmTrunk: '#8a6b4a',
-  palmLeaf: '#3e8f3a',
-  player: '#ffd23e',
-  playerCar: '#e8452c',
-  police: '#2f6fd0',
-  policeLight: '#ff3b30',
-  traffic: ['#d8d8d8', '#7fb3d5', '#c27ba0', '#f0a35e', '#8bc34a', '#9e9e9e'],
-  ped: ['#e8e0d0', '#7a9cc6', '#c67b7b', '#8fce9b', '#d9c27a'],
-  enemy: '#8e2f2f',
-  bullet: '#ffe14d',
-  pickup: '#39d353',
-  marker: '#ffcf3d',
-  hudPanel: 'rgba(12, 16, 24, 0.72)',
-  hudText: '#f2f4f6',
-  hudMuted: '#b9c0c9',
-  star: '#ffd23e',
-  starEmpty: '#5a6068',
-  health: '#43d17c',
-  healthLow: '#e5534b',
-  title: '#ffd23e',
-  panel: 'rgba(16, 20, 30, 0.88)',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where progress is kept between visits (this browser only). */
-export const SAVE_KEY = 'vireo-city.save.v1';
+export const HIDEOUT = { x: 3520, y: 2080, label: 'Hideout', radius: 150 };
+export const SYNDICATE = { x: 1760, y: 800, label: 'Syndicate Tower' };
+export const BEACH_DROP = { x: 420, y: 2080, label: 'Beach drop-off' };

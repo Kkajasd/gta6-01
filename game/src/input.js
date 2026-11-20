@@ -1,100 +1,78 @@
-// Keyboard and mouse input. Held keys give movement; one-shot presses (enter a car,
-// punch, pause, confirm) are queued as bit flags and taken once by the loop, so a press
-// between two frames is never lost and never counted twice. The mouse position is kept
-// in screen pixels; the caller converts it to world coordinates for aiming.
-// Round 3: no input change — the polish is visual only.
-// Round 6: re-written live under the recording; no input change.
-// Round 7: re-written live under the recording; no input change.
-
+// Vireo Bay — keyboard and mouse input. WASD / arrows drive and walk, E enters
+// or steals a car, Space punches (and confirms), F shoots, P pauses, M mutes.
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
 export const ACTION_ENTER = 4;
 export const ACTION_PUNCH = 8;
-export const ACTION_MUTE = 16;
+export const ACTION_SHOOT = 16;
 
-const UP = new Set(['ArrowUp', 'KeyW']);
-const DOWN = new Set(['ArrowDown', 'KeyS']);
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const RUN = new Set(['ShiftLeft', 'ShiftRight']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-const ENTER = new Set(['KeyE']);
-const PUNCH = new Set(['Space']);
-const SHOOT = new Set(['KeyF']);
-const MUTE = new Set(['KeyM']);
+const KEYMAP = {
+  KeyW: 'up', ArrowUp: 'up',
+  KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  KeyE: 'enter',
+  Space: 'punch',
+  KeyF: 'shoot',
+  KeyP: 'pause',
+  Escape: 'pause',
+  KeyM: 'mute',
+  Enter: 'confirm',
+};
 
 export function createInput(canvas) {
-  let up = false;
-  let down = false;
-  let left = false;
-  let right = false;
-  let run = false;
-  let shooting = false;
-  let actions = 0;
-  let mouseX = 0;
-  let mouseY = 0;
-  let mouseDown = false;
+  const held = new Set();
+  const pressed = new Set();
+  let muted = false;
 
-  function onKey(code, pressed, repeat) {
-    if (UP.has(code)) up = pressed;
-    else if (DOWN.has(code)) down = pressed;
-    else if (LEFT.has(code)) left = pressed;
-    else if (RIGHT.has(code)) right = pressed;
-    else if (RUN.has(code)) run = pressed;
-    else if (SHOOT.has(code)) shooting = pressed;
-    else if (!pressed || repeat) return;
-    else if (PUNCH.has(code)) actions |= ACTION_PUNCH | ACTION_CONFIRM;
-    else if (ENTER.has(code)) actions |= ACTION_ENTER;
-    else if (PAUSE.has(code)) actions |= ACTION_PAUSE;
-    else if (MUTE.has(code)) actions |= ACTION_MUTE;
-    else if (CONFIRM.has(code)) actions |= ACTION_CONFIRM;
-    else return;
-    if (CONFIRM.has(code) || PUNCH.has(code) || PAUSE.has(code) || ENTER.has(code) || MUTE.has(code)) {
-      // Keep the page from scrolling on Space / arrows while playing.
-    }
+  function onKeyDown(event) {
+    const name = KEYMAP[event.code];
+    if (!name) return;
+    event.preventDefault();
+    if (!held.has(name)) pressed.add(name);
+    held.add(name);
   }
-
-  window.addEventListener('keydown', (event) => {
-    if (UP.has(event.code) || DOWN.has(event.code) || LEFT.has(event.code) || RIGHT.has(event.code)
-      || CONFIRM.has(event.code) || PUNCH.has(event.code)) event.preventDefault();
-    onKey(event.code, true, event.repeat);
-  });
-  window.addEventListener('keyup', (event) => onKey(event.code, false, false));
-  window.addEventListener('blur', () => {
-    up = false; down = false; left = false; right = false; run = false; shooting = false;
-  });
-
-  canvas.addEventListener('pointermove', (event) => {
-    const rect = canvas.getBoundingClientRect();
-    mouseX = event.clientX - rect.left;
-    mouseY = event.clientY - rect.top;
-  });
-  canvas.addEventListener('pointerdown', (event) => {
-    const rect = canvas.getBoundingClientRect();
-    mouseX = event.clientX - rect.left;
-    mouseY = event.clientY - rect.top;
-    mouseDown = true;
-    actions |= ACTION_CONFIRM;
-  });
-  window.addEventListener('pointerup', () => { mouseDown = false; });
+  function onKeyUp(event) {
+    const name = KEYMAP[event.code];
+    if (name) held.delete(name);
+  }
+  function onMouseDown(event) {
+    event.preventDefault();
+    pressed.add('confirm');
+  }
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  canvas.addEventListener('mousedown', onMouseDown);
 
   return {
-    /** Held-key movement, -1/0/1 per axis, plus run and shooting. */
-    held() {
-      return {
-        up, down, left, right, run,
-        shoot: shooting || mouseDown,
-        punch: false,
-        enter: false,
-        aimScreen: { x: mouseX, y: mouseY },
-      };
+    get muted() {
+      return muted;
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
+    /** Steering -1..1 and throttle 0..1 for driving. */
+    drive() {
+      const steer = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
+      const gas = held.has('up') ? 1 : 0;
+      const brake = held.has('down') ? 1 : 0;
+      return { steer, gas, brake };
+    },
+    /** A unit-ish walk vector for moving on foot. */
+    walk() {
+      const x = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
+      const y = (held.has('down') ? 1 : 0) - (held.has('up') ? 1 : 0);
+      const len = Math.hypot(x, y) || 1;
+      return { x: x / len, y: y / len, moving: x !== 0 || y !== 0 };
+    },
+    /** Edge-triggered actions since the last call; also toggles mute. */
     takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+      let mask = 0;
+      if (pressed.has('confirm') || pressed.has('punch')) mask |= ACTION_CONFIRM;
+      if (pressed.has('pause')) mask |= ACTION_PAUSE;
+      if (pressed.has('enter')) mask |= ACTION_ENTER;
+      if (pressed.has('punch')) mask |= ACTION_PUNCH;
+      if (pressed.has('shoot')) mask |= ACTION_SHOOT;
+      if (pressed.has('mute')) muted = !muted;
+      pressed.clear();
+      return mask;
     },
   };
 }

@@ -1,62 +1,150 @@
-// The story of Vireo Bay: four jobs for Dana Voss, a courier who owes the wrong
-// people money and drives her way out of it. Each mission is a chain of stages; a
-// stage names its objective text, its map marker and what completes it. The world
-// reads the stages, never the story text, so a stage can be re-staged for a screenshot
-// without changing the rules.
-// Round 3: no mission change — the polish is visual only.
-// Round 6: re-written live under the recording; no mission change.
-// Round 7: re-written live under the recording; no mission change.
+// Vireo Bay — the story and the four jobs. Dana Voss owes the Bay Syndicate
+// $5,000. Four jobs, one fast car, and the debt is paid — or the cops get her.
+import { HIDEOUT, SYNDICATE, BEACH_DROP } from './config.js';
 
-import { MISSIONS } from './config.js';
+export const STORY = 'Dana Voss owes the Bay Syndicate $5,000. Four jobs. One fast car.';
 
-export const STORY = {
-  hero: 'Dana Voss',
-  city: 'Vireo Bay',
-  intro: 'Dana Voss owes the Bay Syndicate $5,000. Four jobs. One fast car. Pay it off.',
-};
-
-export const MISSION_DEFS = [
+export const JOBS = [
   {
-    title: 'Job 1 — First Delivery',
-    brief: 'Pick up the sealed crate at the Harbor Docks and drop it at Cafe Lumen. Keep it clean.',
-    stages: [
-      { kind: 'goto', place: 'docks', text: 'Pick up the crate at the Harbor Docks', hint: 'Drive or walk to the yellow marker' },
-      { kind: 'goto', place: 'cafe', text: 'Deliver the crate to Cafe Lumen', hint: 'The client waits at the cafe' },
-    ],
+    id: 1,
+    title: 'First Fare',
+    brief: 'Pick up the client on Neon Ave and drive her to the beach.',
+    kind: 'drive',
+    target: { x: BEACH_DROP.x, y: BEACH_DROP.y, label: BEACH_DROP.label },
+    reward: 800,
+    timer: 100,
+    wanted: 0,
   },
   {
-    title: 'Job 2 — Hot Wheels',
-    brief: 'The Syndicate wants a fast car, not yours. Borrow the red coupe by Sol Plaza — no questions.',
-    stages: [
-      { kind: 'steal', place: 'plaza', text: 'Take the red coupe at Sol Plaza', hint: 'Press E near the coupe to take it' },
-      { kind: 'goto', place: 'market', text: 'Deliver the coupe to Bay Market', hint: 'Fast, but the cops notice stolen cars', timed: 75 },
+    id: 2,
+    title: 'The Package Run',
+    brief: 'Collect 3 packages stashed around Midtown. Mind the patrols.',
+    kind: 'collect',
+    target: { x: 1440, y: 1120, label: 'Package stash' },
+    packages: [
+      { x: 1120, y: 800, taken: false },
+      { x: 1760, y: 1440, taken: false },
+      { x: 2400, y: 800, taken: false },
     ],
+    reward: 1200,
+    timer: 130,
+    wanted: 1,
   },
   {
-    title: 'Job 3 — The Getaway',
-    brief: 'The pickup went loud. Lose the police, then lay low at the Hideout until the heat dies.',
-    stages: [
-      { kind: 'escape', place: 'hideout', text: 'Lose the cops, then reach the Hideout', hint: 'Wanted stars must be gone when you arrive' },
-    ],
+    id: 3,
+    title: 'The Getaway',
+    brief: 'Lose the cops, then reach the Hideout.',
+    kind: 'escape',
+    target: { x: HIDEOUT.x, y: HIDEOUT.y, label: HIDEOUT.label },
+    reward: 1500,
+    timer: 160,
+    wanted: 3,
   },
   {
-    title: 'Job 4 — The Last Drop',
-    brief: 'One last crate, one rival crew waiting at the docks. Settle it, then bring the crate home.',
-    stages: [
-      { kind: 'fight', place: 'docks', text: 'Clear the rival crew at the Harbor Docks', hint: 'Punch with Space, shoot with F or click' },
-      { kind: 'goto', place: 'home', text: 'Bring the crate to Voss Garage', hint: 'Debt paid. Drive home.' },
-    ],
+    id: 4,
+    title: 'The Payoff',
+    brief: 'Deliver $5,000 to the Syndicate tower downtown. Bring heat.',
+    kind: 'deliver',
+    target: { x: SYNDICATE.x, y: SYNDICATE.y, label: SYNDICATE.label },
+    reward: 2000,
+    timer: 190,
+    wanted: 4,
   },
 ];
 
-export function missionReward(index) {
-  return MISSIONS.reward[index] ?? 300;
+/** A fresh mission state for a new game. */
+export function createMission() {
+  return { job: 0, phase: 'brief', timer: 0, collected: 0, done: false, won: false, failed: false };
 }
 
-/** The objective line the HUD shows for the current stage. */
-export function objectiveText(missionIndex, stageIndex) {
-  const def = MISSION_DEFS[missionIndex];
-  if (!def) return 'All jobs done — Vireo Bay is yours.';
-  const stage = def.stages[stageIndex];
-  return stage ? stage.text : def.title;
+/** Start job `index` (0-based): set its target, timer and opening wanted level. */
+export function startJob(world, index) {
+  const job = JOBS[index];
+  world.mission.job = index;
+  world.mission.phase = 'active';
+  world.mission.timer = job.timer;
+  world.mission.collected = 0;
+  world.mission.failed = false;
+  if (job.packages) for (const p of job.packages) p.taken = false;
+  if (job.wanted > world.wanted) world.wanted = job.wanted;
+  world.message = `Job ${job.id} — ${job.title}: ${job.brief}`;
+  world.announce = world.message;
+}
+
+/** The current objective: where the marker sits and what it says. */
+export function jobObjective(world) {
+  const m = world.mission;
+  if (m.phase === 'brief') return { x: world.player.x, y: world.player.y, label: 'Press Space to start', text: STORY };
+  const job = JOBS[m.job];
+  if (m.phase === 'done') return { x: world.player.x, y: world.player.y, label: 'Job done', text: `${job.title} complete — $${job.reward} earned.` };
+  if (job.kind === 'collect') {
+    const left = job.packages.find((p) => !p.taken);
+    if (!left) return { x: job.target.x, y: job.target.y, label: 'All packages', text: 'All packages collected.' };
+    return { x: left.x, y: left.y, label: `Package ${m.collected + 1}/3`, text: `${job.title}: ${3 - m.collected} packages left.` };
+  }
+  return { x: job.target.x, y: job.target.y, label: job.target.label, text: `${job.title}: ${job.brief}` };
+}
+
+/** Advance the mission clock and check the objective. Returns an event mask. */
+export function updateMission(world, dt) {
+  const m = world.mission;
+  if (m.phase !== 'active') return 0;
+  const job = JOBS[m.job];
+  m.timer -= dt;
+  if (m.timer <= 0) {
+    m.phase = 'brief';
+    m.failed = true;
+    world.message = `${job.title} failed — out of time. Press Space to retry.`;
+    world.announce = world.message;
+    return 0;
+  }
+  const p = world.player;
+  if (job.kind === 'collect') {
+    for (const pkg of job.packages) {
+      if (!pkg.taken && Math.hypot(p.x - pkg.x, p.y - pkg.y) < 80) {
+        pkg.taken = true;
+        m.collected += 1;
+        world.cash += 150;
+        world.message = `Package ${m.collected}/3 collected.`;
+        world.announce = world.message;
+        if (m.collected >= 3) return finishJob(world);
+      }
+    }
+    return 0;
+  }
+  if (job.kind === 'escape') {
+    const d = Math.hypot(p.x - job.target.x, p.y - job.target.y);
+    if (world.wanted === 0 && d < HIDEOUT.radius) return finishJob(world);
+    return 0;
+  }
+  const d = Math.hypot(p.x - job.target.x, p.y - job.target.y);
+  if (d < 110) return finishJob(world);
+  return 0;
+}
+
+function finishJob(world) {
+  const m = world.mission;
+  const job = JOBS[m.job];
+  world.cash += job.reward;
+  world.score += job.reward;
+  m.phase = 'done';
+  world.message = `Job ${job.id} complete — $${job.reward} earned.`;
+  world.announce = world.message;
+  if (m.job >= JOBS.length - 1) {
+    m.won = true;
+    m.done = true;
+    world.message = 'Debt paid. Vireo Bay is yours, Dana.';
+    world.announce = world.message;
+  }
+  return 4; // EVENT_JOB
+}
+
+/** Move to the next job after a done one, or restart the failed one. */
+export function advanceMission(world) {
+  const m = world.mission;
+  if (m.phase === 'done' && !m.won) {
+    startJob(world, m.job + 1);
+  } else if (m.failed || m.phase === 'brief') {
+    startJob(world, m.job);
+  }
 }

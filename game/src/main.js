@@ -1,200 +1,145 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s
-// steps (several in a slow frame, none in a fast one), and the renderer paints what is
-// there. The game moves between four screens: title, play, paused and game over.
-// Round 3: no boot change — the polish is visual only.
-// Round 6: re-written live under the recording; no boot change.
-// Round 7: re-written live under the recording; no boot change.
-//
-// ?seed=N fixes the city and traffic. ?shot=chase|street|mission|start (with &seed=N)
-// stages that scene instead of running the loop, paints it twice and sets
-// window.__shotReady for a screenshot.
-import { SAVE_KEY, STEP } from './config.js';
+// Vireo Bay — the boot and the game loop. Two modes: a screenshot shot
+// (?shot=<name>&seed=1) stages the world and paints twice, and the normal game
+// runs the title screen, the drive, and the debt.
 import { createRandom } from './random.js';
-import { createCity } from './city.js';
-import { createWorld, EVENT_BUSTED, EVENT_CRIME, EVENT_DEAD, EVENT_DELIVERED, EVENT_SHOT, EVENT_WON } from './world.js';
-import { ACTION_CONFIRM, ACTION_ENTER, ACTION_MUTE, ACTION_PAUSE, ACTION_PUNCH, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+import { createWorld, EVENT_HIT, EVENT_OVER, EVENT_JOB, EVENT_CRIME } from './world.js';
+import { render, SCREEN_TITLE, SCREEN_PLAY, SCREEN_PAUSED, SCREEN_OVER } from './render.js';
+import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_ENTER, ACTION_PUNCH, ACTION_SHOOT } from './input.js';
 import { createAudio } from './audio.js';
 import { stageShot } from './shots.js';
-
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
-
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+import { BEST_KEY, STEP } from './config.js';
+import { startJob } from './missions.js';
 
 const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const city = createCity(createRandom(seed));
-const world = createWorld(createRandom(seed + 1), city);
-const renderer = createRenderer(canvas);
-const audio = createAudio();
+const ctx = canvas.getContext('2d');
+const params = new URLSearchParams(window.location.search);
+const seed = Number(params.get('seed')) || 20261120;
+const shotName = params.get('shot');
 
-function readSave() {
-  try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return { best: 0, money: 0, jobs: 0 };
-    const parsed = JSON.parse(raw);
-    return {
-      best: Number(parsed.best) || 0,
-      money: Number(parsed.money) || 0,
-      jobs: Number(parsed.jobs) || 0,
-    };
-  } catch {
-    return { best: 0, money: 0, jobs: 0 };
+const random = createRandom(seed);
+const world = createWorld(random);
+try {
+  world.best = Number(window.localStorage.getItem(BEST_KEY) || 0) || 0;
+} catch {
+  world.best = 0;
+}
+
+function saveBest() {
+  if (world.cash > world.best) {
+    world.best = world.cash;
+    try {
+      window.localStorage.setItem(BEST_KEY, String(world.best));
+    } catch {
+      // Best score is a nicety, not a requirement.
+    }
   }
 }
 
-function writeSave(save) {
-  try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(save));
-  } catch {
-    // Storage can be off (private windows): progress then lasts this visit only.
-  }
-}
-
-function runShot(name) {
-  const save = readSave();
-  const scene = stageShot(name, world, city);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, city, scene.screen, Math.max(save.best, scene.best));
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
-}
-
-function runGame() {
+if (shotName) {
+  // Screenshot mode: stage the shot, paint twice, signal readiness.
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const staged = stageShot(shotName, world);
+  render(ctx, world, staged.screen);
+  render(ctx, world, staged.screen);
+  window.__shotReady = true;
+} else {
+  // Game mode.
   const input = createInput(canvas);
+  const audio = createAudio();
   let screen = SCREEN_TITLE;
-  let save = readSave();
-  let best = save.best;
-  let accumulator = 0;
   let last = performance.now();
+  let accumulator = 0;
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes.
-  function announce(message) {
-    status.textContent = message;
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
   }
+  window.addEventListener('resize', resize);
+  resize();
 
-  function bankProgress() {
-    const earned = world.state.earned;
-    if (earned > best) best = earned;
-    save = { best, money: world.state.money, jobs: world.state.stats.delivered };
-    writeSave(save);
-  }
-
-  function startGame() {
-    audio.unlock();
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce('Playing. Job 1: pick up the crate at the Harbor Docks.');
-  }
-
-  function endGame(reason) {
-    screen = SCREEN_OVER;
-    world.state.endReason = reason;
-    bankProgress();
-    if (reason === 'won') announce(`Debt paid! You kept $${world.state.money}. Best haul $${best}.`);
-    else if (reason === 'busted') announce('Busted. Bail cost $100.');
-    else announce(`Wasted. Cash kept $${world.state.money}. Best haul $${best}.`);
-  }
-
-  function handleEvents(events) {
-    if (events & EVENT_DELIVERED) audio.bell();
-    if (events & EVENT_SHOT) audio.shot();
-    if (events & EVENT_CRIME) audio.crime();
-    if (events & EVENT_BUSTED) audio.busted();
-    if (events & EVENT_DEAD) audio.busted();
-    if (events & EVENT_WON) audio.bell();
-  }
-
-  // Actions are taken once per frame here and handed to both handlers, so a press
-  // is never lost and never counted twice.
-  function handleActions(actions) {
-    if (actions & ACTION_MUTE) {
-      const muted = audio.toggleMute();
-      announce(muted ? 'Sound off.' : 'Sound on.');
-    }
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) {
-      audio.unlock();
-      startGame();
-    } else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step(actions) {
-    const held = input.held();
-    // One-shot presses fire on the first sub-step of the frame only.
-    const once = { enter: actions.enter, punch: actions.punch };
-    actions.enter = false;
-    actions.punch = false;
-    const stepInput = {
-      up: held.up,
-      down: held.down,
-      left: held.left,
-      right: held.right,
-      run: held.run,
-      enter: once.enter,
-      punch: once.punch,
-      shoot: held.shoot,
-      aimWorld: null,
+  function frameInput(actions) {
+    return {
+      drive: input.drive(),
+      walk: input.walk(),
+      enter: Boolean(actions & ACTION_ENTER),
+      punch: Boolean(actions & ACTION_PUNCH),
+      shoot: Boolean(actions & ACTION_SHOOT),
     };
-    if (stepInput.shoot) stepInput.aimWorld = renderer.screenToWorld(held.aimScreen.x, held.aimScreen.y, world.state.camera);
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, { up: false, down: false, left: false, right: false, run: false, enter: false, punch: false, shoot: false, aimWorld: null });
-      return;
-    }
-    const events = world.step(STEP, stepInput);
-    handleEvents(events);
-    if (world.state.dead) endGame('dead');
-    else if (world.state.won) endGame('won');
-    else if (world.state.busted) {
-      world.state.busted = false;
-      endGame('busted');
-    }
   }
+
+  const EMPTY_INPUT = {
+    drive: { steer: 0, gas: 0, brake: 0 },
+    walk: { x: 0, y: 0, moving: false },
+    enter: false, punch: false, shoot: false,
+  };
 
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    let dt = (now - last) / 1000;
     last = now;
-    const flags = input.takeActions();
-    handleActions(flags);
-    const actions = { enter: Boolean(flags & ACTION_ENTER), punch: Boolean(flags & ACTION_PUNCH) };
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step(actions);
-        accumulator -= STEP;
-      }
-    } else {
-      accumulator = 0;
+    if (dt > 0.25) dt = 0.25;
+    accumulator += dt;
+    let steps = 0;
+    while (accumulator >= STEP && steps < 5) {
+      accumulator -= STEP;
+      steps += 1;
+      tick();
     }
-    audio.update(STEP, world.state.player.speed || 0, world.state.wanted);
-    renderer.draw(world.state, city, screen, best);
+    if (steps === 5) accumulator = 0;
+    render(ctx, world, screen);
   }
 
-  // Leaving the tab pauses a running game rather than letting the city run unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
+  function tick() {
+    const actions = input.takeActions();
+    audio.setMuted(input.muted);
+    if (screen === SCREEN_TITLE) {
+      world.step(STEP, EMPTY_INPUT, true);
+      if (actions & ACTION_CONFIRM) {
+        audio.unlock();
+        audio.blip();
+        world.reset();
+        startJob(world, 0);
+        screen = SCREEN_PLAY;
+      }
+      return;
     }
-  });
+    if (screen === SCREEN_PAUSED) {
+      if (actions & (ACTION_PAUSE | ACTION_CONFIRM)) {
+        audio.unlock();
+        screen = SCREEN_PLAY;
+      }
+      return;
+    }
+    if (screen === SCREEN_OVER) {
+      if (actions & ACTION_CONFIRM) {
+        audio.unlock();
+        world.reset();
+        screen = SCREEN_TITLE;
+      }
+      return;
+    }
+    // Playing.
+    const fi = frameInput(actions);
+    const events = world.step(STEP, fi, false);
+    if (events & EVENT_CRIME) audio.thud();
+    if (events & EVENT_JOB) audio.cash();
+    if (events & EVENT_HIT) audio.crash();
+    if (fi.shoot) audio.shot();
+    if (fi.punch) audio.blip();
+    audio.engine(world.player.onFoot ? 0 : Math.abs(world.player.speed) / 640);
+    audio.siren(world.wanted > 0);
+    if (actions & ACTION_PAUSE) {
+      screen = SCREEN_PAUSED;
+      return;
+    }
+    if (events & EVENT_OVER || world.over) {
+      saveBest();
+      audio.siren(false);
+      audio.engine(0);
+      screen = SCREEN_OVER;
+    }
+  }
 
-  announce('Vireo Bay. Press Space or click to start.');
   requestAnimationFrame(frame);
 }
-
-if (shot) runShot(shot);
-else runGame();
